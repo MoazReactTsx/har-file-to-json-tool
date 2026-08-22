@@ -115,6 +115,13 @@
 </style>
 </head>
 <body>
+<script>
+(function(){
+  var t = 'paper';
+  try { t = localStorage.getItem('harTheme') || 'paper'; } catch (e) {}
+  document.documentElement.setAttribute('data-theme', t);
+})();
+</script>
 
 <header>
   <div class="brand">
@@ -130,8 +137,8 @@
   </div>
   <div class="spacer"></div>
   <div class="theme-switch" id="themeSwitch">
-    <button class="theme-swatch active" data-theme="night" title="Night" style="background:conic-gradient(from 180deg, #5B7FFF 0deg 180deg, #0C0F14 180deg 360deg);"></button>
-    <button class="theme-swatch" data-theme="paper" title="Paper" style="background:conic-gradient(from 180deg, #3652E0 0deg 180deg, #F7F8FA 180deg 360deg);"></button>
+    <button class="theme-swatch" data-theme="night" title="Night" style="background:conic-gradient(from 180deg, #5B7FFF 0deg 180deg, #0C0F14 180deg 360deg);"></button>
+    <button class="theme-swatch active" data-theme="paper" title="Paper" style="background:conic-gradient(from 180deg, #3652E0 0deg 180deg, #F7F8FA 180deg 360deg);"></button>
     <button class="theme-swatch" data-theme="phosphor" title="Phosphor" style="background:conic-gradient(from 180deg, #39C97A 0deg 180deg, #040A05 180deg 360deg);"></button>
     <button class="theme-swatch" data-theme="amber" title="Amber" style="background:conic-gradient(from 180deg, #E8930A 0deg 180deg, #140D03 180deg 360deg);"></button>
   </div>
@@ -214,10 +221,17 @@
   var SPEED=1, runId=0, p2pOn=false, N_TOTAL=12;
   var P={};
 
+  function applyTheme(name){
+    document.documentElement.setAttribute('data-theme',name);
+    document.querySelectorAll('.theme-swatch').forEach(function(s){s.classList.toggle('active',s.dataset.theme===name);});
+  }
+  var saved='paper';
+  try{saved=localStorage.getItem('harTheme')||'paper';}catch(e){}
+  applyTheme(saved);
   document.querySelectorAll('.theme-swatch').forEach(function(btn){
     btn.addEventListener('click',function(){
-      document.documentElement.setAttribute('data-theme',btn.dataset.theme);
-      document.querySelectorAll('.theme-swatch').forEach(function(s){s.classList.toggle('active',s===btn);});
+      applyTheme(btn.dataset.theme);
+      try{localStorage.setItem('harTheme',btn.dataset.theme);}catch(e){}
     });
   });
 

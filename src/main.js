@@ -224,11 +224,16 @@
         }
     }
 
+    function applyTheme(name) {
+        document.documentElement.setAttribute('data-theme', name);
+        document.querySelectorAll('.theme-swatch').forEach(s => s.classList.toggle('active', s.dataset.theme === name));
+    }
+    applyTheme((() => { try { return localStorage.getItem('harTheme') || 'paper'; } catch (e) { return 'paper'; } })());
     document.getElementById('themeSwitch').addEventListener('click', e => {
         const btn = e.target.closest('.theme-swatch');
         if (!btn) return;
-        document.documentElement.setAttribute('data-theme', btn.dataset.theme);
-        document.querySelectorAll('.theme-swatch').forEach(s => s.classList.toggle('active', s === btn));
+        applyTheme(btn.dataset.theme);
+        try { localStorage.setItem('harTheme', btn.dataset.theme); } catch (e2) { }
     });
 
     loadBtn.addEventListener('click', () => fileInput.click());
