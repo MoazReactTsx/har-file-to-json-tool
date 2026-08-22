@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HAR Inspector — تحويل HAR إلى JSON</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0C0F14;
+    --surface: #12161D;
+    --surface-2: #171C25;
+    --border: #1E2530;
+    --text: #E7EAEF;
+    --muted: #8B93A1;
+    --dim: #545C6A;
+    --accent: #5B7FFF;
+    --accent-soft: #182142;
+    --on-accent: #0A0E1A;
+    --code-text: #C7CCD6;
+    --s2xx: #34C77B;
+    --s3xx: #E8B339;
+    --s4xx: #F0954B;
+    --s5xx: #F0555F;
+    --s0: #626B7A;
+    --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    --ar: 'IBM Plex Sans Arabic', 'IBM Plex Sans', sans-serif;
+    --sans: 'IBM Plex Sans', 'IBM Plex Sans Arabic', sans-serif;
+  }
+  html[data-theme="paper"]{
+    --bg:#F7F8FA; --surface:#FFFFFF; --surface-2:#F1F3F6; --border:#E1E4EA;
+    --text:#1A1D24; --muted:#5B6472; --dim:#9AA3AF;
+    --accent:#3652E0; --accent-soft:#EAEDFC; --on-accent:#FFFFFF; --code-text:#2A3140;
+    --s2xx:#16824B; --s3xx:#9A6B00; --s4xx:#B5540F; --s5xx:#C81E2A; --s0:#6B7280;
+  }
+  html[data-theme="phosphor"]{
+    --bg:#040A05; --surface:#081C0C; --surface-2:#0C2611; --border:#173A1D;
+    --text:#B9FFC0; --muted:#5FA86A; --dim:#356140;
+    --accent:#39C97A; --accent-soft:#0F3D1C; --on-accent:#03170A; --code-text:#9FEFAE;
+  }
+  html[data-theme="amber"]{
+    --bg:#140D03; --surface:#231705; --surface-2:#2E1E07; --border:#4E340F;
+    --text:#FFD27F; --muted:#C9922F; --dim:#7A5A22;
+    --accent:#E8930A; --accent-soft:#4E340F; --on-accent:#1A1103; --code-text:#F0C878;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%;}
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ar);
+    -webkit-font-smoothing: antialiased;
+    display:flex;
+    flex-direction:column;
+    min-height:100vh;
+  }
+
+  /* ---------- top bar ---------- */
+  header{
+    border-bottom:1px solid var(--border);
+    padding: 20px 32px;
+    display:flex; align-items:center; gap:24px; flex-wrap:wrap;
+  }
+  .brand{ display:flex; align-items:center; gap:12px; }
+  .brand svg{ display:block; flex-shrink:0; }
+  .brand-text{ display:flex; align-items:baseline; gap:9px; font-family: var(--sans); }
+  .brand h1{ font-size:15px; font-weight:600; letter-spacing:.1px; color:var(--text); }
+  .brand .sep{ color: var(--dim); font-size:12px; }
+  .brand .tag{ font-size:12px; color: var(--muted); font-family: var(--mono); }
+  .spacer{flex:1;}
+  .stats{
+    display:flex; flex-direction:column; gap:6px;
+    font-family: var(--mono); font-size:11.5px; color:var(--muted);
+    min-width:170px;
+  }
+  .stats b{color:var(--text); font-weight:600;}
+  .strip{ display:flex; height:3px; border-radius:2px; overflow:hidden; background: var(--border); }
+  .strip div{ height:100%; }
+
+  .btn{
+    font-family: var(--sans);
+    font-size:13px; font-weight:500;
+    background: transparent;
+    color: var(--text);
+    border:1px solid transparent;
+    padding:9px 14px;
+    border-radius:6px;
+    cursor:pointer;
+    display:inline-flex; align-items:center; gap:8px;
+    transition: background .15s, color .15s;
+  }
+  .btn:hover{ background: var(--surface-2); }
+  .btn.primary{
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight:600;
+  }
+  .btn.primary:hover{ filter: brightness(1.08); background: var(--accent); }
+  .btn:disabled{ opacity:.35; cursor:not-allowed; }
+  .btn:disabled:hover{ background: transparent; }
+  .btn.small{ padding:6px 11px; font-size:12px; border:1px solid var(--border); }
+  .btn.small:hover{ border-color: var(--accent); background: var(--accent-soft); }
+  input[type=file]{ display:none; }
+  input[type=checkbox]{ accent-color: var(--accent); width:14px; height:14px; cursor:pointer; flex-shrink:0; }
+
+  .theme-switch{ display:flex; gap:8px; align-items:center; }
+  .theme-swatch{
+    width:15px; height:15px; border-radius:50%;
+    border:2px solid transparent; padding:0; cursor:pointer;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .theme-swatch.active{ border-color: var(--text); }
+
+  /* ---------- layout ---------- */
+  main{
+    flex:1;
+    display:grid;
+    grid-template-columns: 400px 1fr;
+    min-height:0;
+  }
+  @media (max-width: 860px){
+    main{ grid-template-columns: 1fr; }
+    .detail{ display:none; }
+    .detail.open{ display:flex; }
+    .list{ display:flex; }
+    .list.hidden{ display:none; }
+  }
+
+  /* ---------- drop zone (empty state) ---------- */
+  .dropzone{
+    grid-column: 1 / -1;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:22px;
+    padding:60px 20px;
+    text-align:center;
+  }
+  .dropzone .mark{ color: var(--accent); }
+  .dropzone h2{
+    font-family: var(--sans); font-size:19px; font-weight:600;
+  }
+  .dropzone p{
+    color: var(--muted); font-size:13.5px; max-width:440px; line-height:1.9;
+    font-family: var(--ar);
+  }
+  .zone{
+    position:relative;
+    margin-top:6px;
+    width:min(560px, 90vw);
+    padding:44px 24px;
+    cursor:pointer;
+    transition: background .15s;
+  }
+  .zone b{ color:var(--text); display:block; font-family:var(--ar); font-size:14.5px; margin-bottom:6px; font-weight:600; }
+  .zone span.sub{ font-family: var(--mono); font-size:11.5px; color:var(--dim); }
+  .zone.drag{ background: var(--accent-soft); }
+  .zone.drag .corner{ border-color: var(--accent); }
+  .zone.drag b{ color: var(--accent); }
+  .corner{
+    position:absolute; width:18px; height:18px;
+    border: 1.5px solid var(--border);
+    transition: border-color .15s;
+  }
+  .corner.tl{ top:0; right:0; border-bottom:none; border-left:none; }
+  .corner.tr{ top:0; left:0; border-bottom:none; border-right:none; }
+  .corner.bl{ bottom:0; right:0; border-top:none; border-left:none; }
+  .corner.br{ bottom:0; left:0; border-top:none; border-right:none; }
+
+  /* ---------- request list ---------- */
+  .list{
+    border-left:1px solid var(--border);
+    display:flex; flex-direction:column;
+    min-height:0;
+  }
+  .filterbar{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border);
+  }
+  .filterbar input{
+    width:100%;
+    background: var(--surface);
+    border:1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size:12px;
+    padding:9px 12px;
+    border-radius:6px;
+    outline:none;
+  }
+  .filterbar input:focus{ border-color: var(--accent); }
+  .selectbar{
+    display:flex; align-items:center; gap:10px;
+    padding:10px 16px;
+    border-bottom:1px solid var(--border);
+    font-family: var(--sans); font-size:12.5px; color:var(--muted);
+  }
+  .selall{ display:flex; align-items:center; gap:7px; cursor:pointer; user-select:none; }
+  .sel-spacer{ flex:1; }
+  .sel-count{ color: var(--accent); font-family: var(--mono); font-size:11.5px; }
+  .rows{ flex:1; overflow-y:auto; }
+  .row{
+    padding:12px 16px;
+    border-bottom:1px solid var(--border);
+    border-inline-start:3px solid transparent;
+    cursor:pointer;
+    display:flex; flex-direction:column; gap:6px;
+    transition: background .12s, border-color .12s;
+  }
+  .row:hover{ background: var(--surface); }
+  .row.active{ background: var(--surface-2); }
+  .row.s2{ border-inline-start-color: var(--s2xx); }
+  .row.s3{ border-inline-start-color: var(--s3xx); }
+  .row.s4{ border-inline-start-color: var(--s4xx); }
+  .row.s5{ border-inline-start-color: var(--s5xx); }
+  .row.s0{ border-inline-start-color: var(--s0); }
+  .row-top{ display:flex; align-items:center; gap:10px; font-family: var(--mono); }
+  .method{ font-size:11px; font-weight:700; letter-spacing:.3px; flex-shrink:0; color: var(--accent); }
+  .method.POST{ color: var(--s2xx); }
+  .method.PUT, .method.PATCH{ color: var(--s3xx); }
+  .method.DELETE{ color: var(--s4xx); }
+  .status{ font-size:11.5px; font-weight:700; flex-shrink:0; }
+  .status.s2{ color: var(--s2xx); }
+  .status.s3{ color: var(--s3xx); }
+  .status.s4{ color: var(--s4xx); }
+  .status.s5{ color: var(--s5xx); }
+  .status.s0{ color: var(--s0); }
+  .row-time{ margin-left:auto; color:var(--dim); font-size:10.5px; }
+  .row-url{
+    font-family: var(--mono); font-size:11.5px; color:var(--muted);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:ltr; text-align:left;
+  }
+
+  /* ---------- detail panel ---------- */
+  .detail{ display:flex; flex-direction:column; min-height:0; }
+  .detail-empty{
+    flex:1; display:flex; align-items:center; justify-content:center;
+    color: var(--dim); font-family: var(--sans); font-size:13px;
+  }
+  .detail-head{ padding:22px 28px; border-bottom:1px solid var(--border); }
+  .detail-head .u{
+    font-family: var(--mono); font-size:14px; word-break:break-all; direction:ltr; text-align:left;
+    color: var(--text); line-height:1.6; font-weight:500;
+  }
+  .meta{ margin-top:12px; display:flex; align-items:center; flex-wrap:wrap; }
+  .meta-item{
+    font-family: var(--mono); font-size:11.5px; color:var(--muted);
+    padding:0 12px; border-inline-start:1px solid var(--border);
+  }
+  .meta-item:first-child{ border-inline-start:none; padding-inline-start:0; }
+  .tabs{
+    display:flex; gap:4px; padding:0 28px;
+    border-bottom:1px solid var(--border);
+  }
+  .tab{
+    font-family: var(--sans); font-size:12.5px; font-weight:500;
+    color: var(--muted);
+    padding:12px 6px;
+    margin-inline-end:20px;
+    cursor:pointer;
+    border-bottom:2px solid transparent;
+  }
+  .tab.active{ color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-body{ flex:1; overflow-y:auto; padding:22px 28px; }
+  .section-title{
+    font-family: var(--mono); font-size:11px; letter-spacing:.5px;
+    color: var(--dim); text-transform:uppercase;
+    margin: 4px 0 10px 0;
+  }
+  pre{
+    font-family: var(--mono); font-size:12px; line-height:1.7;
+    background: var(--surface);
+    border-inline-start: 2px solid var(--border);
+    padding:14px 16px; overflow-x:auto; color: var(--code-text); direction:ltr; text-align:left;
+    white-space:pre-wrap; word-break:break-all;
+  }
+  .empty-note{ color:var(--dim); font-family:var(--sans); font-size:12.5px; }
+
+  ::-webkit-scrollbar{ width:9px; height:9px; }
+  ::-webkit-scrollbar-track{ background: transparent; }
+  ::-webkit-scrollbar-thumb{ background: var(--border); border-radius:5px; }
+  ::-webkit-scrollbar-thumb:hover{ background: var(--dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <svg width="26" height="18" viewBox="0 0 26 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M1 14L7 8L11 12L17 4L25 10" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="25" cy="10" r="2" fill="var(--accent)"/>
+    </svg>
+    <div class="brand-text">
+      <h1>HAR Inspector</h1>
+      <span class="sep">·</span>
+      <span class="tag">HAR → JSON</span>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="stats" id="stats" style="display:none;">
+    <span>الطلبات <b id="statTotal">0</b></span>
+    <div class="strip" id="statStrip"></div>
+  </div>
+  <div class="theme-switch" id="themeSwitch">
+    <button class="theme-swatch active" data-theme="night" title="Night" style="background:conic-gradient(from 180deg, #5B7FFF 0deg 180deg, #0C0F14 180deg 360deg);"></button>
+    <button class="theme-swatch" data-theme="paper" title="Paper" style="background:conic-gradient(from 180deg, #3652E0 0deg 180deg, #F7F8FA 180deg 360deg);"></button>
+    <button class="theme-swatch" data-theme="phosphor" title="Phosphor" style="background:conic-gradient(from 180deg, #39C97A 0deg 180deg, #040A05 180deg 360deg);"></button>
+    <button class="theme-swatch" data-theme="amber" title="Amber" style="background:conic-gradient(from 180deg, #E8930A 0deg 180deg, #140D03 180deg 360deg);"></button>
+  </div>
+  <input type="file" id="fileInput" accept=".har,application/json">
+  <button class="btn" id="loadBtn">فتح ملف HAR</button>
+  <button class="btn primary" id="downloadBtn" disabled>تنزيل JSON</button>
+</header>
+
+<main id="main">
+  <div class="dropzone" id="dropzone">
+    <svg class="mark" width="34" height="34" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <h2>حوّل ملف HAR إلى JSON مبسّط</h2>
+    <p>ارفع ملف HAR وهيتم استخراج الأساسيات بس لكل طلب: الرابط، status code، بيانات الـ request (params/body)، وبيانات الـ response — من غير أي تفاصيل زيادة.</p>
+    <div class="zone" id="zone">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <b>اسحب ملف HAR هنا</b>
+      <span class="sub">أو اضغط للاختيار من جهازك — .har</span>
+    </div>
+  </div>
+</main>
+
+<script>
+(function(){
+  const fileInput = document.getElementById('fileInput');
+  const loadBtn = document.getElementById('loadBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const zone = document.getElementById('zone');
+  const dropzone = document.getElementById('dropzone');
+  const main = document.getElementById('main');
+  const statsEl = document.getElementById('stats');
+  const statTotal = document.getElementById('statTotal');
+  const statStrip = document.getElementById('statStrip');
+
+  let simplified = [];
+  let activeIndex = null;
+  let selected = new Set();
+
+  document.getElementById('themeSwitch').addEventListener('click', e => {
+    const btn = e.target.closest('.theme-swatch');
+    if (!btn) return;
+    document.documentElement.setAttribute('data-theme', btn.dataset.theme);
+    document.querySelectorAll('.theme-swatch').forEach(s => s.classList.toggle('active', s === btn));
+  });
+
+  loadBtn.addEventListener('click', () => fileInput.click());
+  zone.addEventListener('click', () => fileInput.click());
+
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag');
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', e => {
+    if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
+  });
+
+  function handleFile(file){
+    const reader = new FileReader();
+    reader.onload = evt => {
+      try{
+        const har = JSON.parse(evt.target.result);
+        const entries = (har.log && har.log.entries) ? har.log.entries : [];
+        if (!entries.length){
+          alert('الملف ده مفيهوش entries — تأكد إنه ملف HAR صحيح.');
+          return;
+        }
+        simplified = entries.map(simplifyEntry);
+        selected = new Set();
+        activeIndex = null;
+        renderList();
+        buildStats();
+        downloadBtn.disabled = false;
+      }catch(err){
+        alert('تعذر قراءة الملف. تأكد إنه JSON/HAR صحيح.\n' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function simplifyEntry(entry){
+    const req = entry.request || {};
+    const res = entry.response || {};
+    const queryParams = (req.queryString || []).map(q => ({ name: q.name, value: q.value }));
+    let postParams = null;
+    if (req.postData){
+      if (req.postData.params && req.postData.params.length){
+        postParams = req.postData.params.map(p => ({ name: p.name, value: p.value }));
+      } else if (req.postData.text){
+        postParams = req.postData.text;
+      }
+    }
+    let responseBody = null;
+    if (res.content && typeof res.content.text !== 'undefined'){
+      responseBody = res.content.text;
+      if (res.content.encoding === 'base64' && responseBody){
+        try{ responseBody = decodeURIComponent(escape(atob(responseBody))); }catch(e){ /* leave as-is */ }
+      }
+      if (responseBody && res.content.mimeType && res.content.mimeType.includes('json')){
+        try{ responseBody = JSON.parse(responseBody); }catch(e){ /* keep string */ }
+      }
+    }
+    return {
+      method: req.method || 'GET',
+      url: req.url || '',
+      status: res.status || 0,
+      statusText: res.statusText || '',
+      mimeType: (res.content && res.content.mimeType) || '',
+      time: entry.time || 0,
+      requestParams: {
+        query: queryParams,
+        body: postParams
+      },
+      response: responseBody
+    };
+  }
+
+  function statusClass(status){
+    if (status >= 200 && status < 300) return 's2';
+    if (status >= 300 && status < 400) return 's3';
+    if (status >= 400 && status < 500) return 's4';
+    if (status >= 500) return 's5';
+    return 's0';
+  }
+  function statusColorVar(status){
+    if (status >= 200 && status < 300) return 'var(--s2xx)';
+    if (status >= 300 && status < 400) return 'var(--s3xx)';
+    if (status >= 400 && status < 500) return 'var(--s4xx)';
+    if (status >= 500) return 'var(--s5xx)';
+    return 'var(--s0)';
+  }
+
+  function renderList(){
+    main.innerHTML = `
+      <div class="list" id="listPane">
+        <div class="filterbar"><input id="filterInput" placeholder="فلترة بالرابط أو method..."></div>
+        <div class="selectbar">
+          <label class="selall"><input type="checkbox" id="selectAllChk"> تحديد الكل</label>
+          <span class="sel-spacer"></span>
+          <span class="sel-count" id="selCount"></span>
+          <button class="btn small" id="downloadSelectedBtn" style="display:none;">تنزيل المحدد</button>
+        </div>
+        <div class="rows" id="rows"></div>
+      </div>
+      <div class="detail" id="detailPane">
+        <div class="detail-empty">اختر طلب من القائمة لعرض تفاصيله</div>
+      </div>
+    `;
+    document.getElementById('filterInput').addEventListener('input', e => paintRows(e.target.value));
+    document.getElementById('selectAllChk').addEventListener('change', e => {
+      const filter = document.getElementById('filterInput').value;
+      const idxs = getFilteredIndices(filter);
+      if (e.target.checked) idxs.forEach(i => selected.add(i));
+      else idxs.forEach(i => selected.delete(i));
+      paintRows(filter);
+    });
+    document.getElementById('downloadSelectedBtn').addEventListener('click', () => {
+      const items = Array.from(selected).sort((a, b) => a - b).map(i => simplified[i]);
+      downloadJSON(items, 'har-selected.json');
+    });
+    paintRows('');
+  }
+
+  function getFilteredIndices(filter){
+    const f = (filter || '').toLowerCase();
+    const idxs = [];
+    simplified.forEach((item, i) => {
+      if (f && !(item.url.toLowerCase().includes(f) || item.method.toLowerCase().includes(f))) return;
+      idxs.push(i);
+    });
+    return idxs;
+  }
+
+  function paintRows(filter){
+    const rows = document.getElementById('rows');
+    rows.innerHTML = '';
+    const idxs = getFilteredIndices(filter);
+    idxs.forEach(i => {
+      const item = simplified[i];
+      const sc = statusClass(item.status);
+      const row = document.createElement('div');
+      row.className = 'row ' + sc + (i === activeIndex ? ' active' : '');
+      row.innerHTML = `
+        <div class="row-top">
+          <input type="checkbox" class="row-chk" ${selected.has(i) ? 'checked' : ''}>
+          <span class="method ${item.method}">${item.method}</span>
+          <span class="status ${sc}">${item.status || '—'}</span>
+          <span class="row-time">${Math.round(item.time)}ms</span>
+        </div>
+        <div class="row-url">${escapeHtml(item.url)}</div>
+      `;
+      const chk = row.querySelector('.row-chk');
+      chk.addEventListener('click', e => e.stopPropagation());
+      chk.addEventListener('change', () => {
+        if (chk.checked) selected.add(i); else selected.delete(i);
+        paintRows(filter);
+      });
+      row.addEventListener('click', () => { activeIndex = i; paintRows(filter); showDetail(i); });
+      rows.appendChild(row);
+    });
+    updateSelectionUI(idxs);
+  }
+
+  function updateSelectionUI(idxs){
+    const selCountEl = document.getElementById('selCount');
+    const dlSelBtn = document.getElementById('downloadSelectedBtn');
+    const selectAllChk = document.getElementById('selectAllChk');
+    const count = selected.size;
+    if (selCountEl) selCountEl.textContent = count ? `${count} محدد` : '';
+    if (dlSelBtn) dlSelBtn.style.display = count ? 'inline-flex' : 'none';
+    if (selectAllChk){
+      const allChecked = idxs.length > 0 && idxs.every(i => selected.has(i));
+      const anyChecked = idxs.some(i => selected.has(i));
+      selectAllChk.checked = allChecked;
+      selectAllChk.indeterminate = anyChecked && !allChecked;
+    }
+  }
+
+  function showDetail(i){
+    const item = simplified[i];
+    const pane = document.getElementById('detailPane');
+    const queryStr = JSON.stringify(item.requestParams.query, null, 2);
+    const bodyStr = typeof item.requestParams.body === 'object'
+      ? JSON.stringify(item.requestParams.body, null, 2)
+      : (item.requestParams.body || 'لا يوجد body');
+    const responseStr = typeof item.response === 'object'
+      ? JSON.stringify(item.response, null, 2)
+      : (item.response || 'لا يوجد محتوى');
+
+    pane.innerHTML = `
+      <div class="detail-head">
+        <div class="u">${escapeHtml(item.url)}</div>
+        <div class="meta">
+          <span class="meta-item">${item.method}</span>
+          <span class="meta-item" style="color:${statusColorVar(item.status)}">${item.status} ${escapeHtml(item.statusText)}</span>
+          <span class="meta-item">${escapeHtml(item.mimeType || 'unknown type')}</span>
+          <span class="meta-item">${Math.round(item.time)} ms</span>
+        </div>
+      </div>
+      <div class="tabs">
+        <div class="tab active" data-tab="request">Request Params</div>
+        <div class="tab" data-tab="response">Response</div>
+        <div class="tab" data-tab="raw">Raw JSON</div>
+      </div>
+      <div class="tab-body" id="tabBody"></div>
+    `;
+
+    const tabBody = document.getElementById('tabBody');
+    function paintTab(tab){
+      if (tab === 'request'){
+        tabBody.innerHTML = `
+          <div class="section-title">Query Params</div>
+          ${item.requestParams.query.length ? `<pre>${escapeHtml(queryStr)}</pre>` : `<p class="empty-note">لا يوجد query params</p>`}
+          <div class="section-title" style="margin-top:20px;">Body / Post Data</div>
+          <pre>${escapeHtml(bodyStr)}</pre>
+        `;
+      } else if (tab === 'response'){
+        tabBody.innerHTML = `
+          <div class="section-title">Response Body</div>
+          <pre>${escapeHtml(responseStr)}</pre>
+        `;
+      } else {
+        tabBody.innerHTML = `<pre>${escapeHtml(JSON.stringify(item, null, 2))}</pre>`;
+      }
+    }
+    paintTab('request');
+    pane.querySelectorAll('.tab').forEach(t => {
+      t.addEventListener('click', () => {
+        pane.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+        paintTab(t.dataset.tab);
+      });
+    });
+  }
+
+  function buildStats(){
+    statsEl.style.display = 'flex';
+    statTotal.textContent = simplified.length;
+    const counts = {s2:0, s3:0, s4:0, s5:0, s0:0};
+    simplified.forEach(i => counts[statusClass(i.status)]++);
+    const colors = {s2:'var(--s2xx)', s3:'var(--s3xx)', s4:'var(--s4xx)', s5:'var(--s5xx)', s0:'var(--s0)'};
+    statStrip.innerHTML = '';
+    Object.keys(counts).forEach(k => {
+      if (!counts[k]) return;
+      const seg = document.createElement('div');
+      seg.style.width = (counts[k] / simplified.length * 100) + '%';
+      seg.style.background = colors[k];
+      statStrip.appendChild(seg);
+    });
+  }
+
+  downloadBtn.addEventListener('click', () => {
+    if (!simplified.length) return;
+    downloadJSON(simplified, 'har-simplified.json');
+  });
+
+  function downloadJSON(data, filename){
+    if (!data.length) return;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function escapeHtml(str){
+    if (typeof str !== 'string') str = String(str);
+    return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+})();
+</script>
+
+</body>
+</html>
