@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HAR Inspector — كيف تعمل المشاركة المباشرة؟</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./src/style.css">
+<style>
+  body{overflow:hidden;}
+  .stage-wrap{flex:1;position:relative;min-height:0;}
+  .stage{position:absolute;inset:0;}
+  svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+  .wire{stroke:var(--border);stroke-width:1.5;fill:none;}
+  .wire.manual{stroke:var(--s3xx);opacity:.5;stroke-dasharray:6 6;}
+  .wire.p2pbase{stroke:var(--dim);}
+  .wire.p2plive{stroke:var(--accent);stroke-width:2;stroke-dasharray:8 8;opacity:0;}
+  .wire.p2plive.active{opacity:1;animation:dashflow .5s linear infinite;}
+  @keyframes dashflow{to{stroke-dashoffset:-16;}}
+  .wire.icew{stroke-dasharray:2 5;opacity:.65;}
+  .wire-label{fill:var(--dim);font-family:var(--mono);font-size:10px;text-anchor:middle;}
+
+  .node{position:absolute;z-index:2;}
+  .card{
+    width:min(240px,27vw);
+    background:var(--surface);border:1px solid var(--border);border-radius:10px;
+    padding:13px 14px;display:flex;flex-direction:column;gap:9px;
+    transition:border-color .25s, box-shadow .25s;
+  }
+  #nodeHost{top:50%;transform:translateY(-50%);right:26px;}
+  #nodeJoin{top:50%;transform:translateY(-50%);left:26px;}
+  .card.hot{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+  .card.done{border-color:var(--s2xx);box-shadow:0 0 0 3px rgba(52,199,123,.15);}
+  .card-top{display:flex;align-items:center;gap:8px;}
+  .card-top b{font-family:var(--sans);font-size:13px;font-weight:600;}
+  .en{font-family:var(--mono);color:var(--dim);font-size:9.5px;letter-spacing:1.5px;margin-inline-start:auto;}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex-shrink:0;transition:background .2s;}
+  .dot.pending{background:var(--s3xx);animation:pulse 1s ease-in-out infinite;}
+  .dot.ok{background:var(--s2xx);}
+  @keyframes pulse{50%{opacity:.3;}}
+  .card-sub{font-size:11px;color:var(--muted);margin-top:-4px;}
+  .card-log{
+    display:flex;flex-direction:column;gap:4px;min-height:112px;
+    font-family:var(--mono);font-size:10.5px;direction:ltr;text-align:left;
+    overflow:hidden;
+  }
+  .log-line{
+    padding:4px 8px;background:var(--bg);border-left:2px solid var(--border);
+    color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    opacity:0;transform:translateY(-4px);transition:.25s;
+  }
+  .log-line.show{opacity:1;transform:none;}
+  .log-line.code{color:var(--accent);border-left-color:var(--accent);}
+  .log-line.ok{color:var(--s2xx);border-left-color:var(--s2xx);}
+
+  #nodeStun{
+    top:30px;left:50%;transform:translateX(-50%);
+    text-align:center;background:var(--surface);border:1px solid var(--border);
+    border-radius:10px;padding:9px 18px;color:var(--muted);
+  }
+  #nodeStun svg{display:block;margin:0 auto 3px;color:var(--dim);}
+  #nodeStun b{font-family:var(--mono);font-size:11px;color:var(--text);display:block;}
+  #nodeStun span{font-family:var(--mono);font-size:9.5px;color:var(--dim);}
+
+  .legend{
+    position:absolute;top:118px;left:50%;transform:translateX(-50%);
+    display:flex;gap:22px;font-family:var(--mono);font-size:10.5px;color:var(--muted);z-index:2;
+    white-space:nowrap;
+  }
+  .legend i{display:inline-block;width:26px;border-top:2px dashed var(--s3xx);vertical-align:middle;margin-inline-end:7px;}
+  .legend i.solid{border-top-style:solid;border-top-color:var(--accent);}
+  .legend i.dotted{border-top-style:dotted;border-top-color:var(--dim);}
+
+  .pkt{
+    position:absolute;z-index:5;transform:translate(-50%,-50%);
+    background:var(--surface-2);border:1px solid var(--accent);color:var(--text);
+    font-family:var(--mono);font-size:10px;padding:4px 9px;border-radius:999px;
+    white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.3);pointer-events:none;
+  }
+  .pkt.fade{opacity:0;transition:opacity .22s;}
+  .pkt.ice{width:8px;height:8px;padding:0;border-radius:50%;background:var(--accent);border:none;}
+
+  .bottombar{
+    border-top:1px solid var(--border);padding:15px 32px;
+    display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+  }
+  .step-num{
+    font-family:var(--mono);color:var(--accent);font-size:12px;
+    border:1px solid var(--accent);border-radius:6px;padding:5px 10px;min-width:34px;text-align:center;flex-shrink:0;
+  }
+  .step-info{flex:1;min-width:260px;}
+  .step-title{font-family:var(--sans);font-size:14.5px;font-weight:600;}
+  .step-desc{color:var(--muted);font-size:12px;line-height:1.8;margin-top:3px;font-family:var(--ar);}
+  .progress{width:210px;flex-shrink:0;display:none;}
+  .progress.on{display:block;}
+  .progress-track{height:4px;background:var(--border);border-radius:2px;overflow:hidden;}
+  .progress-fill{height:100%;width:0%;background:var(--accent);transition:width .2s;}
+  .progress-label{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:5px;text-align:center;}
+  .controls{display:flex;gap:8px;align-items:center;flex-shrink:0;}
+  .controls select{
+    background:var(--surface);border:1px solid var(--border);color:var(--text);
+    font-family:var(--mono);font-size:12px;padding:8px 10px;border-radius:6px;outline:none;cursor:pointer;
+  }
+
+  @media (max-width:760px){
+    .legend{display:none;}
+    .card{width:min(200px,38vw);}
+    .bottombar{padding:12px 16px;gap:12px;}
+    .progress{width:140px;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <svg width="26" height="18" viewBox="0 0 26 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M1 14L7 8L11 12L17 4L25 10" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="25" cy="10" r="2" fill="var(--accent)"/>
+    </svg>
+    <div class="brand-text">
+      <h1>HAR Inspector</h1>
+      <span class="sep">·</span>
+      <span class="tag">كيف تعمل المشاركة؟</span>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="theme-switch" id="themeSwitch">
+    <button class="theme-swatch active" data-theme="night" title="Night" style="background:conic-gradient(from 180deg, #5B7FFF 0deg 180deg, #0C0F14 180deg 360deg);"></button>
+    <button class="theme-swatch" data-theme="paper" title="Paper" style="background:conic-gradient(from 180deg, #3652E0 0deg 180deg, #F7F8FA 180deg 360deg);"></button>
+    <button class="theme-swatch" data-theme="phosphor" title="Phosphor" style="background:conic-gradient(from 180deg, #39C97A 0deg 180deg, #040A05 180deg 360deg);"></button>
+    <button class="theme-swatch" data-theme="amber" title="Amber" style="background:conic-gradient(from 180deg, #E8930A 0deg 180deg, #140D03 180deg 360deg);"></button>
+  </div>
+  <a class="btn" href="./index.html">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M19 12H5m0 0l6-6m-6 6l6 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    رجوع للأداة
+  </a>
+</header>
+
+<div class="stage-wrap">
+  <div class="stage" id="stage">
+    <svg class="wires" id="wires"></svg>
+
+    <div class="node" id="nodeStun">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M7 18a4.5 4.5 0 01-.6-8.96A6 6 0 0118 8.5 4 4 0 0117.5 18H7z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+      <b>STUN</b>
+      <span>stun.l.google.com</span>
+    </div>
+
+    <div class="legend">
+      <span><i></i>إشارات يدوية — نسخ ولصق</span>
+      <span><i class="dotted"></i>ICE / STUN</span>
+      <span><i class="solid"></i>DataChannel مباشر</span>
+    </div>
+
+    <div class="node card" id="nodeHost">
+      <div class="card-top">
+        <span class="dot" id="hostDot"></span>
+        <b>المضيف</b>
+        <span class="en">HOST</span>
+      </div>
+      <div class="card-sub">عنده ملف HAR وجاهز يرسل</div>
+      <div class="card-log" id="hostLog"></div>
+    </div>
+
+    <div class="node card" id="nodeJoin">
+      <div class="card-top">
+        <span class="dot" id="joinDot"></span>
+        <b>المستقبل</b>
+        <span class="en">JOINER</span>
+      </div>
+      <div class="card-sub">عايز يستلم الطلبات مباشرة</div>
+      <div class="card-log" id="joinLog"></div>
+    </div>
+  </div>
+</div>
+
+<div class="bottombar">
+  <span class="step-num" id="stepNum">•</span>
+  <div class="step-info">
+    <div class="step-title" id="stepTitle"></div>
+    <div class="step-desc" id="stepDesc"></div>
+  </div>
+  <div class="progress" id="progWrap">
+    <div class="progress-track"><div class="progress-fill" id="progFill"></div></div>
+    <div class="progress-label" id="progLabel"></div>
+  </div>
+  <div class="controls">
+    <select id="speedSel" title="سرعة العرض">
+      <option value="0.55">بطيء ٠٫٥×</option>
+      <option value="1" selected>عادي ١×</option>
+      <option value="1.9">سريع ٢×</option>
+    </select>
+    <button class="btn small" id="replayBtn">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M4 4v6h6M20 20v-6h-6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.6 10A8 8 0 0119 8.5M19.4 14A8 8 0 015 15.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      إعادة التشغيل
+    </button>
+  </div>
+</div>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id);};
+  var stage=$('stage'), svg=$('wires');
+  var nodeHost=$('nodeHost'), nodeJoin=$('nodeJoin'), nodeStun=$('nodeStun');
+  var hDot=$('hostDot'), jDot=$('joinDot'), hLog=$('hostLog'), jLog=$('joinLog');
+  var stepNum=$('stepNum'), stepTitle=$('stepTitle'), stepDesc=$('stepDesc');
+  var progWrap=$('progWrap'), progFill=$('progFill'), progLabel=$('progLabel');
+
+  var SPEED=1, runId=0, p2pOn=false, N_TOTAL=12;
+  var P={};
+
+  document.querySelectorAll('.theme-swatch').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      document.documentElement.setAttribute('data-theme',btn.dataset.theme);
+      document.querySelectorAll('.theme-swatch').forEach(function(s){s.classList.toggle('active',s===btn);});
+    });
+  });
+
+  $('speedSel').addEventListener('change',function(e){SPEED=parseFloat(e.target.value);});
+  $('replayBtn').addEventListener('click',function(){run();});
+
+  var STEPS=[
+    {n:'•',t:'جاهز للبدء',d:'مثال تفاعلي يوضّح كيف تنتقل بيانات HAR بين متصفحين عبر WebRTC — بدون أي سيرفر وبدون تخزين.'},
+    {n:'1',t:'المضيف ينشئ الاتصال',d:'new RTCPeerConnection ثم إنشاء قناة بيانات باسم har ستُستخدم لنقل الطلبات لاحقًا.'},
+    {n:'2',t:'توليد Offer وجمع ICE',d:'createOffer ينتج وصف SDP، ويتم سؤال سيرفر STUN عن عنوان الشبكة العامة (مرشّحات ICE).'},
+    {n:'3',t:'إرسال كود العرض يدويًا',d:'يُشفَّر العرض Base64 وينسخه المضيف ويرسله للمستقبل بأي وسيلة — واتساب، سلاك… أي حاجة.'},
+    {n:'4',t:'المستقبل يولّد Answer',d:'بعد لصق الكود: setRemoteDescription ثم createAnswer وسؤال STUN بنفس الطريقة.'},
+    {n:'5',t:'إرجاع كود الرد',d:'ينسخ المستقبل كود Answer Base64 ويرسله للمضيف بنفس الوسيلة اليدوية.'},
+    {n:'6',t:'فتح قناة البيانات',d:'المضيف يضع الـ Answer في setRemoteDescription — فتُفتح قناة DTLS مشفّرة بين المتصفحين مباشرة.'},
+    {n:'7',t:'نقل البيانات كحِزَم',d:'يُقسَّم JSON لحِزَم 15KB: رسالة start تعلن عدد الحِزَم، ثم chunk لكل جزء بالترتيب، ثم end للإنهاء.'},
+    {n:'8',t:'اكتمل الاستلام ✅',d:'يعاد تجميع الحِزَم بالترتيب وتحويلها JSON ثم عرضها فورًا — بدون تخزين ولا سيرفر في المنتصف.'}
+  ];
+
+  function setCaption(i){
+    var s=STEPS[i];
+    stepNum.textContent=s.n;
+    stepTitle.textContent=s.t;
+    stepDesc.textContent=s.d;
+  }
+
+  function rel(el){
+    var r=el.getBoundingClientRect(), s=stage.getBoundingClientRect();
+    return {
+      l:r.left-s.left, t:r.top-s.top, r:r.right-s.left, b:r.bottom-s.top,
+      w:r.width, h:r.height,
+      cx:r.left-s.left+r.width/2, cy:r.top-s.top+r.height/2
+    };
+  }
+
+  function mkPath(d,cls){
+    var p=document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d',d);
+    p.setAttribute('class',cls);
+    svg.appendChild(p);
+    return p;
+  }
+  function mkText(x,y,str){
+    var t=document.createElementNS('http://www.w3.org/2000/svg','text');
+    t.setAttribute('x',x); t.setAttribute('y',y);
+    t.setAttribute('class','wire-label');
+    t.textContent=str;
+    svg.appendChild(t);
+    return t;
+  }
+
+  function buildWires(){
+    svg.innerHTML='';
+    p2pOn=false;
+    var W=stage.clientWidth, H=rel(nodeHost), J=rel(nodeJoin), S=rel(nodeStun);
+    var cy=W&&stage.clientHeight?stage.clientHeight/2:H.cy;
+    var my=cy-52, py=cy+46;
+
+    mkPath('M '+(H.l-12)+' '+my+' Q '+(W/2)+' '+(my-88)+' '+(J.r+12)+' '+my,'wire manual');
+    mkPath('M '+(H.l-12)+' '+py+' L '+(J.r+12)+' '+py,'wire p2pbase');
+    var live=mkPath('M '+(H.l-12)+' '+py+' L '+(J.r+12)+' '+py,'wire p2plive');
+    mkPath('M '+H.cx+' '+(H.t-10)+' C '+H.cx+' '+(H.t-70)+' '+(S.r-26)+' '+(S.b+62)+' '+(S.r-26)+' '+(S.b+8),'wire icew');
+    mkPath('M '+J.cx+' '+(J.t-10)+' C '+J.cx+' '+(J.t-70)+' '+(S.l+26)+' '+(S.b+62)+' '+(S.l+26)+' '+(S.b+8),'wire icew');
+    mkText(W/2,my-102,'إشارات يدوية — نسخ ولصق الكود');
+    mkText(W/2,py+20,'DataChannel — اتصال مباشر ومشفّر');
+
+    P={
+      manual:{el:svg.children[0]},
+      p2p:{el:svg.children[1]},
+      stunH:{el:svg.children[3]},
+      stunJ:{el:svg.children[4]}
+    };
+    Object.keys(P).forEach(function(k){P[k].len=P[k].el.getTotalLength();});
+    P.live=live;
+    applyP2p();
+  }
+
+  function applyP2p(){
+    if(P.live) P.live.classList.toggle('active',p2pOn);
+  }
+
+  function addLog(logEl,text,cls){
+    var line=document.createElement('div');
+    line.className='log-line'+(cls?' '+cls:'');
+    line.textContent=text;
+    logEl.appendChild(line);
+    while(logEl.children.length>6) logEl.removeChild(logEl.firstChild);
+    requestAnimationFrame(function(){requestAnimationFrame(function(){line.classList.add('show');});});
+  }
+  function hot(card){card.classList.add('hot');}
+  function unhot(card){card.classList.remove('hot');}
+  function pending(dot){dot.className='dot pending';}
+  function ok(dot){dot.className='dot ok';}
+
+  function fly(pr,text,opts){
+    opts=opts||{};
+    return new Promise(function(res){
+      var el=document.createElement('div');
+      el.className='pkt'+(opts.cls?' '+opts.cls:'');
+      if(text) el.textContent=text;
+      stage.appendChild(el);
+      var len=pr.el.getTotalLength();
+      var D=(opts.dur||1100)/SPEED;
+      var t0=performance.now();
+      function fr(now){
+        var k=Math.min(1,(now-t0)/D);
+        var e=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+        var pt=pr.el.getPointAtLength((opts.rev?1-e:e)*len);
+        el.style.left=pt.x+'px';
+        el.style.top=pt.y+'px';
+        if(k<1) requestAnimationFrame(fr);
+        else{
+          el.classList.add('fade');
+          setTimeout(function(){el.remove();res();},230);
+        }
+      }
+      requestAnimationFrame(fr);
+    });
+  }
+
+  function iceTrip(pr,id){
+    return fly(pr,'',{cls:'ice',dur:500}).then(function(){
+      if(id!==runId) throw 'cancelled';
+      return fly(pr,'',{cls:'ice',rev:true,dur:500});
+    });
+  }
+
+  function wait(ms){
+    return new Promise(function(res){setTimeout(res,ms/SPEED);});
+  }
+  function g(id){if(id!==runId)throw 'cancelled';}
+
+  function reset(){
+    stage.querySelectorAll('.pkt').forEach(function(p){p.remove();});
+    hLog.innerHTML=''; jLog.innerHTML='';
+    hDot.className='dot'; jDot.className='dot';
+    [nodeHost,nodeJoin].forEach(function(c){c.classList.remove('hot','done');});
+    p2pOn=false; applyP2p();
+    progWrap.classList.remove('on');
+    progFill.style.width='0%'; progLabel.textContent='';
+  }
+
+  function setProgress(k){
+    progFill.style.width=(Math.min(1,k)*100)+'%';
+    progLabel.textContent='الحِزَم '+Math.round(Math.min(1,k)*N_TOTAL)+'/'+N_TOTAL;
+  }
+
+  async function run(){
+    var id=++runId;
+    try{
+      reset();
+      setCaption(0);
+      await wait(650); g(id);
+
+      setCaption(1);
+      hot(nodeHost);
+      addLog(hLog,'const pc = new RTCPeerConnection(cfg)','code');
+      await wait(700); g(id);
+      addLog(hLog,"pc.createDataChannel('har')",'code');
+      await wait(700); g(id);
+      unhot(nodeHost);
+
+      setCaption(2);
+      pending(hDot); hot(nodeHost);
+      addLog(hLog,'await pc.createOffer()','code');
+      await wait(420); g(id);
+      await iceTrip(P.stunH,id); g(id);
+      await iceTrip(P.stunH,id); g(id);
+      addLog(hLog,'ICE gathering: complete','ok');
+      await wait(380); g(id);
+
+      setCaption(3);
+      addLog(hLog,'btoa(localDescription)','code');
+      await wait(380); g(id);
+      await fly(P.manual,'OFFER · eyJ0eXAiOiJvZmZlciIsInNk…',{dur:1750}); g(id);
+      addLog(jLog,'offer code received ✓','ok');
+      unhot(nodeHost); hot(nodeJoin);
+
+      setCaption(4);
+      pending(jDot);
+      addLog(jLog,'setRemoteDescription(offer)','code');
+      await wait(560); g(id);
+      addLog(jLog,'await pc.createAnswer()','code');
+      await iceTrip(P.stunJ,id); g(id);
+      await iceTrip(P.stunJ,id); g(id);
+      addLog(jLog,'ICE gathering: complete','ok');
+      await wait(320); g(id);
+
+      setCaption(5);
+      addLog(jLog,'btoa(localDescription)','code');
+      await wait(360); g(id);
+      await fly(P.manual,'ANSWER · eyJ0eXAiOiJhbnN3ZXIiLCJz…',{dur:1750,rev:true}); g(id);
+      addLog(hLog,'answer code received ✓','ok');
+      unhot(nodeJoin); hot(nodeHost);
+
+      setCaption(6);
+      addLog(hLog,'setRemoteDescription(answer)','code');
+      await wait(780); g(id);
+      p2pOn=true; applyP2p();
+      ok(hDot); ok(jDot);
+      addLog(hLog,'datachannel open · DTLS 🔒','ok');
+      await wait(280); g(id);
+      addLog(jLog,'datachannel open · DTLS 🔒','ok');
+      unhot(nodeHost);
+      await wait(700); g(id);
+
+      setCaption(7);
+      progWrap.classList.add('on');
+      setProgress(0);
+      await fly(P.p2p,"{ t:'start', n:"+N_TOTAL+' }',{dur:980}); g(id);
+      addLog(jLog,"start → expect "+N_TOTAL+' chunks','code');
+      var done=0, flights=[];
+      for(var i=0;i<N_TOTAL;i++){
+        flights.push(
+          fly(P.p2p,"{ t:'chunk', i:"+i+' }',{dur:840}).then(function(){
+            if(id!==runId) return;
+            done++;
+            setProgress(done/N_TOTAL);
+            if(done%3===0) addLog(jLog,'received '+done+'/'+N_TOTAL,'');
+          })
+        );
+        await wait(170); g(id);
+      }
+      await Promise.all(flights); g(id);
+      await fly(P.p2p,"{ t:'end' }",{dur:860}); g(id);
+      addLog(jLog,'end ✓ '+N_TOTAL+'/'+N_TOTAL+' received','ok');
+
+      setCaption(8);
+      nodeJoin.classList.add('done');
+      addLog(jLog,'JSON.parse → render ✓','ok');
+      await wait(1800); g(id);
+      run();
+    }catch(e){
+      if(e!=='cancelled') throw e;
+    }
+  }
+
+  var rsT=null;
+  window.addEventListener('resize',function(){
+    clearTimeout(rsT);
+    rsT=setTimeout(buildWires,150);
+  });
+  window.addEventListener('load',buildWires);
+
+  buildWires();
+  run();
+})();
+</script>
+</body>
+</html>
