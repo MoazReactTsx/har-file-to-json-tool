@@ -97,10 +97,18 @@
 
   .theme-switch{ display:flex; gap:8px; align-items:center; }
   .theme-swatch{
-    width:15px; height:15px; border-radius:50%;
-    border:2px solid transparent; padding:0; cursor:pointer;
+    width:25px;
+    height:25px;
+    border-radius:2px;
+    border:2px solid transparent;
+    padding:0;
+    cursor:pointer;
     box-shadow: inset 0 0 0 1px var(--border);
-  }
+    -webkit-border-radius:2px;
+    -moz-border-radius:2px;
+    -ms-border-radius:2px;
+    -o-border-radius:2px;
+}
   .theme-swatch.active{ border-color: var(--text); }
 
   /* ---------- layout ---------- */
