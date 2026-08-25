@@ -8,221 +8,35 @@
     const statsEl = document.getElementById('stats');
     const statTotal = document.getElementById('statTotal');
     const statStrip = document.getElementById('statStrip');
+    const shareBtn = document.getElementById('shareBtn');
 
     let simplified = [];
     let activeIndex = null;
     let selected = new Set();
 
-    /* ---------- live share (WebRTC, manual signaling) ---------- */
-    const rtcConfig = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
-    const shareOverlay = document.getElementById('shareOverlay');
-    const shareBody = document.getElementById('shareBody');
-    const shareBtn = document.getElementById('shareBtn');
-    let shareTab = 'host';
-    let pc = null, dc = null;
-    let incomingChunks = [], incomingExpected = 0;
-
-    shareBtn.addEventListener('click', () => { shareTab = 'host'; openShareModal(); });
-    document.getElementById('shareClose').addEventListener('click', closeShareModal);
-    shareOverlay.addEventListener('click', e => { if (e.target === shareOverlay) closeShareModal(); });
-    document.querySelectorAll('[data-share-tab]').forEach(t => {
-        t.addEventListener('click', () => {
-            shareTab = t.dataset.shareTab;
-            document.querySelectorAll('[data-share-tab]').forEach(x => x.classList.toggle('active', x === t));
-            renderShareBody();
-        });
+    /* ---------- live share (WebRTC) ----------
+       All the signaling/transport/UI logic now lives in p2p-share.js and
+       p2p-share-ui.js. Load both BEFORE this file:
+         <script src="p2p-share.js"></script>
+         <script src="p2p-share-ui.js"></script>
+       The old #shareOverlay / #shareBody / [data-share-tab] markup in the
+       HTML is no longer needed — the modal builds and styles itself. You
+       only need to keep the #shareBtn button. */
+    const shareModal = createP2PShareModal({
+        getPayload: () => (selected.size
+            ? Array.from(selected).sort((a, b) => a - b).map(i => simplified[i])
+            : simplified),
+        itemCount: () => (selected.size || simplified.length),
+        onDataReceived: (data) => {
+            simplified = data;
+            selected = new Set();
+            activeIndex = null;
+            renderList();
+            buildStats();
+            downloadBtn.disabled = false;
+        },
     });
-
-    function openShareModal() {
-        teardownConnection();
-        shareOverlay.classList.add('open');
-        document.querySelectorAll('[data-share-tab]').forEach(x => x.classList.toggle('active', x.dataset.shareTab === shareTab));
-        renderShareBody();
-    }
-    function closeShareModal() {
-        shareOverlay.classList.remove('open');
-        teardownConnection();
-    }
-    function teardownConnection() {
-        if (dc) { try { dc.close(); } catch (e) { } dc = null; }
-        if (pc) { try { pc.close(); } catch (e) { } pc = null; }
-        incomingChunks = []; incomingExpected = 0;
-    }
-
-    function encodeDesc(desc) { return btoa(unescape(encodeURIComponent(JSON.stringify({ type: desc.type, sdp: desc.sdp })))); }
-    function decodeDesc(code) { return JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }
-
-    function waitIceGatheringComplete(peer) {
-        return new Promise(resolve => {
-            if (peer.iceGatheringState === 'complete') { resolve(); return; }
-            const check = () => {
-                if (peer.iceGatheringState === 'complete') {
-                    peer.removeEventListener('icegatheringstatechange', check);
-                    resolve();
-                }
-            };
-            peer.addEventListener('icegatheringstatechange', check);
-            setTimeout(resolve, 4000);
-        });
-    }
-
-    function renderShareBody() {
-        teardownConnection();
-        if (shareTab === 'host') renderHostPanel();
-        else renderJoinPanel();
-    }
-
-    function renderHostPanel() {
-        const count = simplified.length;
-        const selCount = selected.size;
-        if (!count) {
-            shareBody.innerHTML = `<p class="hint">لازم تفتح ملف HAR الأول عشان يكون فيه بيانات تشاركها.</p>`;
-            return;
-        }
-        shareBody.innerHTML = `
-      <p class="hint">هيتم إنشاء كود اتصال، ابعته للشخص التاني (واتساب/سلاك/أي حاجة). بعدها هو هيبعتلك كود رد، تحطه تحت وتضغط اتصال. البيانات بتتبعت مباشرة بين المتصفحين، ومتفضلش موجودة إلا لما الصفحة دي فاتحة عندك.</p>
-      <button class="btn primary" id="hostStart">${selCount ? `ابدأ مشاركة المحدد (${selCount})` : `ابدأ مشاركة الكل (${count})`}</button>
-      <div class="share-step" id="hostOfferStep" style="display:none;">
-        <div class="label">الخطوة ١ — ابعت الكود ده للطرف التاني</div>
-        <textarea class="code-box" id="hostOfferCode" readonly></textarea>
-        <button class="btn small" id="hostCopyOffer">نسخ الكود</button>
-      </div>
-      <div class="share-step" id="hostAnswerStep" style="display:none;">
-        <div class="label">الخطوة ٢ — الصق الكود اللي هيبعتهولك</div>
-        <textarea class="code-box" id="hostAnswerInput" placeholder="الصق كود الرد هنا..."></textarea>
-        <button class="btn primary" id="hostConnect">اتصال</button>
-      </div>
-      <div class="share-status" id="hostStatus" style="display:none;"></div>
-    `;
-        document.getElementById('hostStart').addEventListener('click', hostStart);
-    }
-
-    async function hostStart() {
-        teardownConnection();
-        const payload = selected.size ? Array.from(selected).sort((a, b) => a - b).map(i => simplified[i]) : simplified;
-        pc = new RTCPeerConnection(rtcConfig);
-        dc = pc.createDataChannel('har');
-        dc.onopen = () => {
-            sendPayload(dc, payload);
-            setHostStatus(`متصل — تم إرسال ${payload.length} طلب ✅`, 'ok');
-        };
-        dc.onclose = () => setHostStatus('الاتصال اتقفل', '');
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await waitIceGatheringComplete(pc);
-        document.getElementById('hostOfferStep').style.display = 'flex';
-        document.getElementById('hostAnswerStep').style.display = 'flex';
-        document.getElementById('hostOfferCode').value = encodeDesc(pc.localDescription);
-        document.getElementById('hostCopyOffer').addEventListener('click', () => copyText(document.getElementById('hostOfferCode').value));
-        document.getElementById('hostConnect').addEventListener('click', async () => {
-            const code = document.getElementById('hostAnswerInput').value;
-            if (!code.trim()) return;
-            try {
-                const desc = decodeDesc(code);
-                await pc.setRemoteDescription(desc);
-                setHostStatus('بيتصل...', 'pending');
-            } catch (e) { alert('كود الرد مش صحيح.'); }
-        });
-        setHostStatus('في انتظار كود الرد...', 'pending');
-    }
-
-    function setHostStatus(text, cls) {
-        const el = document.getElementById('hostStatus');
-        if (!el) return;
-        el.style.display = 'block';
-        el.textContent = text;
-        el.className = 'share-status' + (cls ? ' ' + cls : '');
-    }
-
-    function renderJoinPanel() {
-        shareBody.innerHTML = `
-      <p class="hint">الصق الكود اللي بعتهولك المضيف، وهيتولّد كود رد — ابعته له. البيانات هتظهر هنا أول ما يوصل الاتصال.</p>
-      <div class="share-step">
-        <div class="label">الخطوة ١ — الصق كود المضيف</div>
-        <textarea class="code-box" id="joinOfferInput" placeholder="الصق الكود هنا..."></textarea>
-        <button class="btn primary" id="joinGenerate">توليد كود الرد</button>
-      </div>
-      <div class="share-step" id="joinAnswerStep" style="display:none;">
-        <div class="label">الخطوة ٢ — ابعت الكود ده للمضيف</div>
-        <textarea class="code-box" id="joinAnswerCode" readonly></textarea>
-        <button class="btn small" id="joinCopyAnswer">نسخ الكود</button>
-      </div>
-      <div class="share-status" id="joinStatus" style="display:none;"></div>
-    `;
-        document.getElementById('joinGenerate').addEventListener('click', joinGenerate);
-    }
-
-    async function joinGenerate() {
-        const code = document.getElementById('joinOfferInput').value;
-        if (!code.trim()) return;
-        teardownConnection();
-        try {
-            pc = new RTCPeerConnection(rtcConfig);
-            pc.ondatachannel = e => {
-                dc = e.channel;
-                dc.onmessage = ev => handleIncomingMessage(ev.data);
-                dc.onopen = () => setJoinStatus('متصل — في انتظار البيانات...', 'pending');
-            };
-            const desc = decodeDesc(code);
-            await pc.setRemoteDescription(desc);
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            await waitIceGatheringComplete(pc);
-            document.getElementById('joinAnswerStep').style.display = 'flex';
-            document.getElementById('joinAnswerCode').value = encodeDesc(pc.localDescription);
-            document.getElementById('joinCopyAnswer').addEventListener('click', () => copyText(document.getElementById('joinAnswerCode').value));
-            setJoinStatus('ابعت الكود للمضيف وانتظر الاتصال...', 'pending');
-        } catch (e) { alert('كود المضيف مش صحيح.'); }
-    }
-
-    function setJoinStatus(text, cls) {
-        const el = document.getElementById('joinStatus');
-        if (!el) return;
-        el.style.display = 'block';
-        el.textContent = text;
-        el.className = 'share-status' + (cls ? ' ' + cls : '');
-    }
-
-    function copyText(text) {
-        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => { });
-    }
-
-    function sendPayload(channel, arr) {
-        const json = JSON.stringify(arr);
-        const CHUNK = 15000;
-        const total = Math.max(1, Math.ceil(json.length / CHUNK));
-        channel.send(JSON.stringify({ t: 'start', n: total }));
-        for (let i = 0; i < total; i++) {
-            channel.send(JSON.stringify({ t: 'chunk', i, d: json.slice(i * CHUNK, (i + 1) * CHUNK) }));
-        }
-        channel.send(JSON.stringify({ t: 'end' }));
-    }
-
-    function handleIncomingMessage(raw) {
-        let msg;
-        try { msg = JSON.parse(raw); } catch (e) { return; }
-        if (msg.t === 'start') {
-            incomingChunks = new Array(msg.n);
-            incomingExpected = msg.n;
-            setJoinStatus(`جاري الاستقبال 0/${msg.n}...`, 'pending');
-        } else if (msg.t === 'chunk') {
-            incomingChunks[msg.i] = msg.d;
-            const received = incomingChunks.filter(c => c !== undefined).length;
-            setJoinStatus(`جاري الاستقبال ${received}/${incomingExpected}...`, 'pending');
-        } else if (msg.t === 'end') {
-            try {
-                const data = JSON.parse(incomingChunks.join(''));
-                simplified = data;
-                selected = new Set();
-                activeIndex = null;
-                renderList();
-                buildStats();
-                downloadBtn.disabled = false;
-                setJoinStatus(`اتستقبل ${data.length} طلب ✅`, 'ok');
-                setTimeout(closeShareModal, 900);
-            } catch (e) { setJoinStatus('حصل خطأ في استقبال البيانات', ''); }
-        }
-    }
+    shareBtn.addEventListener('click', () => shareModal.open('host'));
 
     function applyTheme(name) {
         document.documentElement.setAttribute('data-theme', name);
