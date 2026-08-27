@@ -67,23 +67,7 @@
         received:         (n) => `اتستقبل ${n} عنصر ✅`,
         receiveError:     'حصل خطأ في استقبال البيانات',
         badOffer:         'كود المضيف غير صالح — تأكد من نسخه كاملًا.',
-        saveDeviceCheck:  'حفظ هذا الجهاز للاتصال مستقبلًا',
-        saveDeviceName:   'اسم الجهاز',
-        saveDeviceBtn:    'حفظ',
-        devicesTitle:     'الأجهزة المحفوظة',
-        devicesEmpty:     'لا توجد أجهزة محفوظة بعد.\nبعد أي اتصال ناجح يمكنك حفظ الجهاز.',
-        deviceLastSeen:   'آخر اتصال:',
-        directConnect:    'اتصال مباشر',
-        renameDevice:     'تعديل الاسم',
-        deleteDevice:     'حذف',
-        confirmDelete:    'تأكيد حذف الجهاز؟',
-        encryptedBadge:   '🔒 مشفّر',
-        memoryBadge:      '⚠ مؤقت (جلسة فقط)',
-        storageError:     'تعذّر حفظ البيانات — سيتم الاحتفاظ بها في الذاكرة فقط لهذه الجلسة.',
         close:            '×',
-        saveDeviceDefaultName: 'جهاز جديد',
-        deviceSaved:      (n) => `✅ تم حفظ الجهاز "${n}"`,
-        loadingDevices:   'جاري تحميل الأجهزة...'
     };
 
     let cssInjected = false;
@@ -219,7 +203,6 @@
       <div class="p2ps-tabs">
         <div class="p2ps-tab" data-tab="host">${esc(L.hostTab)}</div>
         <div class="p2ps-tab" data-tab="join">${esc(L.joinTab)}</div>
-        <div class="p2ps-tab" data-tab="devices">${esc(L.devicesTab)}</div>
       </div>
       <div class="p2ps-body"></div>
     </div>
@@ -237,7 +220,7 @@
         function teardown() { if (share) share.teardown(); share = null; }
 
         function open(mode = 'host') {
-            currentTab = ['host','join','devices'].includes(mode) ? mode : 'host';
+            currentTab = ['host','join'].includes(mode) ? mode : 'host';
             overlay.classList.add('open');
             paintTabs();
             render();
@@ -262,7 +245,7 @@
                 navigator.clipboard.writeText(text).catch(() => {});
         }
 
-        function render() { teardown(); ({ host: renderHost, join: renderJoin, devices: renderDevices }[currentTab] || renderHost)(); }
+        function render() { teardown(); ({ host: renderHost, join: renderJoin }[currentTab] || renderHost)(); }
 
         // ── status helper ─────────────────────────────────────────────
         function makeSetStatus(statusEl) {
@@ -287,47 +270,7 @@
             return map[code] || L.receiveError;
         }
 
-        // ── "Save this device" widget ─────────────────────────────────
-        function makeSaveWidget(statusEl, setStatus, onSaved) {
-            const row = document.createElement('div');
-            row.className = 'p2ps-save-row';
-            row.innerHTML = `
-        <label>
-          <input type="checkbox" id="p2ps-save-chk">
-          <span>${esc(L.saveDeviceCheck)}</span>
-        </label>
-        <input class="p2ps-save-input" id="p2ps-save-name" placeholder="${esc(L.saveDeviceName)}" style="display:none;">
-        <button class="p2ps-btn small primary" id="p2ps-save-do" style="display:none;">${esc(L.saveDeviceBtn)}</button>
-      `;
-            const chk  = row.querySelector('#p2ps-save-chk');
-            const inp  = row.querySelector('#p2ps-save-name');
-            const btn  = row.querySelector('#p2ps-save-do');
 
-            chk.addEventListener('change', () => {
-                inp.style.display = chk.checked ? '' : 'none';
-                btn.style.display = chk.checked ? '' : 'none';
-            });
-
-            btn.addEventListener('click', async () => {
-                const name = inp.value.trim() || L.saveDeviceDefaultName;
-                btn.disabled = true;
-                try {
-                    const id = await store.saveDevice(name);
-                    row.innerHTML = `<span style="font-size:12.5px;color:var(--s2xx);font-weight:600">${esc(L.deviceSaved(name))}</span>`;
-                    if (!store.isEncrypted) {
-                        statusEl.style.display = 'block';
-                        setStatus(L.storageError, 'error');
-                    }
-                    if (typeof onSaved === 'function') onSaved(id, name);
-                } catch (e) {
-                    btn.disabled = false;
-                    statusEl.style.display = 'block';
-                    setStatus(e.message || L.storageError, 'error');
-                }
-            });
-
-            return row;
-        }
 
         // ── HOST tab ──────────────────────────────────────────────────
         function renderHost() {
@@ -363,10 +306,6 @@
                     onStatus: (s) => {
                         if (s === 'connected-sent') {
                             setStatus(L.connectedSent(Array.isArray(payload) ? payload.length : 1), 'ok');
-                            // show save widget after successful send
-                            if (!body.querySelector('.p2ps-save-row')) {
-                                body.appendChild(makeSaveWidget(statusEl, setStatus, null));
-                            }
                         }
                         if (s === 'closed')        setStatus(L.closed, '');
                         if (s === 'disconnected')  setStatus(L.disconnected, 'error');
@@ -437,10 +376,6 @@
                             const cnt = Array.isArray(data) ? data.length : 1;
                             setStatus(L.received(cnt), 'ok');
                             if (typeof onDataReceived === 'function') onDataReceived(data);
-                            // show save widget after successful receive
-                            if (!body.querySelector('.p2ps-save-row')) {
-                                body.appendChild(makeSaveWidget(statusEl, setStatus, null));
-                            }
                             setTimeout(close, 1200);
                         },
                         onError: (_err, code) => setStatus(errorMsg(code), 'error'),
@@ -456,95 +391,7 @@
             });
         }
 
-        // ── DEVICES tab ───────────────────────────────────────────────
-        async function renderDevices() {
-            body.innerHTML = `<p class="p2ps-hint" style="margin:0;color:var(--dim);font-size:12px">${esc(L.loadingDevices)}</p>`;
 
-            const devices = await store.getAll();
-
-            const badgeClass = store.isEncrypted ? 'enc' : 'mem';
-            const badgeText  = store.isEncrypted ? L.encryptedBadge : L.memoryBadge;
-
-            if (!devices.length) {
-                body.innerHTML = `
-        <div class="p2ps-devices-header">
-          <span class="p2ps-devices-title">${esc(L.devicesTitle)}</span>
-          <span class="p2ps-storage-badge ${badgeClass}">${esc(badgeText)}</span>
-        </div>
-        <div class="p2ps-devices-empty">${esc(L.devicesEmpty)}</div>`;
-                return;
-            }
-
-            body.innerHTML = `
-      <div class="p2ps-devices-header">
-        <span class="p2ps-devices-title">${esc(L.devicesTitle)}</span>
-        <span class="p2ps-storage-badge ${badgeClass}">${esc(badgeText)}</span>
-      </div>
-      <div id="p2ps-device-list"></div>`;
-
-            const list = body.querySelector('#p2ps-device-list');
-
-            function paintList(devArr) {
-                list.innerHTML = '';
-                devArr.forEach(dev => {
-                    const card = document.createElement('div');
-                    card.className = 'p2ps-device-card';
-                    card.innerHTML = `
-          <div class="p2ps-device-info">
-            <div class="p2ps-device-name" id="p2ps-dn-${esc(dev.id)}">${esc(dev.name)}</div>
-            <div class="p2ps-device-meta">
-              <span class="p2ps-device-id">#${esc(dev.id)}</span>
-              <span class="p2ps-device-date">${esc(L.deviceLastSeen)} ${fmtDate(dev.lastSeen)}</span>
-            </div>
-          </div>
-          <div class="p2ps-device-actions">
-            <button class="p2ps-icon-btn connect-dev" data-id="${esc(dev.id)}" title="${esc(L.directConnect)}">⚡ ${esc(L.directConnect)}</button>
-            <button class="p2ps-icon-btn rename"       data-id="${esc(dev.id)}" title="${esc(L.renameDevice)}">✏️</button>
-            <button class="p2ps-icon-btn del"          data-id="${esc(dev.id)}" title="${esc(L.deleteDevice)}">🗑</button>
-          </div>`;
-
-                    // Direct Connect → switch to host tab and kick off an offer
-                    card.querySelector('.connect-dev').addEventListener('click', async () => {
-                        currentTab = 'host';
-                        paintTabs();
-                        render();
-                        // Brief delay to let renderHost paint first
-                        await new Promise(r => setTimeout(r, 50));
-                        const startBtn = body.querySelector('[data-act="start"]');
-                        if (startBtn) startBtn.click();
-                        // After a successful connection, auto-touch lastSeen
-                        try { await store.touchDevice(dev.id); } catch (e) { /* ignore */ }
-                    });
-
-                    // Rename
-                    card.querySelector('.rename').addEventListener('click', async () => {
-                        const newName = window.prompt(`${L.renameDevice} — ${dev.name}`, dev.name);
-                        if (newName === null || !newName.trim()) return;
-                        try {
-                            await store.renameDevice(dev.id, newName.trim());
-                            renderDevices();
-                        } catch (e) {
-                            alert(e.message || 'Error renaming device');
-                        }
-                    });
-
-                    // Delete
-                    card.querySelector('.del').addEventListener('click', async () => {
-                        if (!window.confirm(L.confirmDelete)) return;
-                        try {
-                            await store.removeDevice(dev.id);
-                            renderDevices();
-                        } catch (e) {
-                            alert(e.message || 'Error deleting device');
-                        }
-                    });
-
-                    list.appendChild(card);
-                });
-            }
-
-            paintList(devices);
-        }
 
         return { open, close, store };
     }

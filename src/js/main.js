@@ -177,23 +177,7 @@
         received:         (n) => `Received ${n} item(s) ✅`,
         receiveError:     'An error occurred while receiving data',
         badOffer:         'Host code is invalid — make sure you copied it in full.',
-        saveDeviceCheck:  'Save this device for future connections',
-        saveDeviceName:   'Device name',
-        saveDeviceBtn:    'Save',
-        devicesTitle:     'Saved Devices',
-        devicesEmpty:     'No saved devices yet.\nAfter any successful connection you can save the device.',
-        deviceLastSeen:   'Last seen:',
-        directConnect:    'Direct Connect',
-        renameDevice:     'Rename',
-        deleteDevice:     'Delete',
-        confirmDelete:    'Delete this device?',
-        encryptedBadge:   '🔒 Encrypted',
-        memoryBadge:      '⚠ Session only',
-        storageError:     'Could not save data — will be kept in memory for this session only.',
         close:            '×',
-        saveDeviceDefaultName: 'New device',
-        deviceSaved:      (n) => `✅ Device "${n}" saved`,
-        loadingDevices:   'Loading devices...'
     };
 
     let shareModal = buildShareModal();
