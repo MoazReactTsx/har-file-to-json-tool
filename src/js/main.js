@@ -9,6 +9,7 @@
     const statTotal = document.getElementById('statTotal');
     const statStrip = document.getElementById('statStrip');
     const shareBtn = document.getElementById('shareBtn');
+    const devicesBtn = document.getElementById('devicesBtn');
 
     let simplified = [];
     let activeIndex = null;
@@ -21,7 +22,21 @@
          <script src="p2p-share-ui.js"></script>
        The old #shareOverlay / #shareBody / [data-share-tab] markup in the
        HTML is no longer needed — the modal builds and styles itself. You
-       only need to keep the #shareBtn button. */
+       only need to keep the #shareBtn and #devicesBtn buttons. */
+
+    // Derive a friendly local device name from the user-agent so the remote
+    // peer sees something meaningful in the handshake code.
+    function guessDeviceName() {
+        const ua = navigator.userAgent || '';
+        if (/iPhone/.test(ua))  return 'iPhone';
+        if (/iPad/.test(ua))    return 'iPad';
+        if (/Android/.test(ua)) return 'Android';
+        if (/Mac/.test(ua))     return 'Mac';
+        if (/Windows/.test(ua)) return 'Windows PC';
+        if (/Linux/.test(ua))   return 'Linux';
+        return 'Browser';
+    }
+
     const shareModal = createP2PShareModal({
         getPayload: () => (selected.size
             ? Array.from(selected).sort((a, b) => a - b).map(i => simplified[i])
@@ -35,8 +50,12 @@
             buildStats();
             downloadBtn.disabled = false;
         },
+        shareOptions: {
+            deviceName: guessDeviceName(),
+        },
     });
     shareBtn.addEventListener('click', () => shareModal.open('host'));
+    if (devicesBtn) devicesBtn.addEventListener('click', () => shareModal.open('devices'));
 
     function applyTheme(name) {
         document.documentElement.setAttribute('data-theme', name);
