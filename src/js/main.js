@@ -191,6 +191,9 @@
         memoryBadge:      '⚠ Session only',
         storageError:     'Could not save data — will be kept in memory for this session only.',
         close:            '×',
+        saveDeviceDefaultName: 'New device',
+        deviceSaved:      (n) => `✅ Device "${n}" saved`,
+        loadingDevices:   'Loading devices...'
     };
 
     let shareModal = buildShareModal();

@@ -81,6 +81,9 @@
         memoryBadge:      '⚠ مؤقت (جلسة فقط)',
         storageError:     'تعذّر حفظ البيانات — سيتم الاحتفاظ بها في الذاكرة فقط لهذه الجلسة.',
         close:            '×',
+        saveDeviceDefaultName: 'جهاز جديد',
+        deviceSaved:      (n) => `✅ تم حفظ الجهاز "${n}"`,
+        loadingDevices:   'جاري تحميل الأجهزة...'
     };
 
     let cssInjected = false;
@@ -306,16 +309,21 @@
             });
 
             btn.addEventListener('click', async () => {
-                const name = inp.value.trim() || 'جهاز جديد';
+                const name = inp.value.trim() || L.saveDeviceDefaultName;
                 btn.disabled = true;
-                const id = await store.saveDevice(name);
-                btn.disabled = false;
-                row.innerHTML = `<span style="font-size:12.5px;color:#166534;font-weight:600">✅ تم حفظ الجهاز "${esc(name)}"</span>`;
-                if (!store.isEncrypted) {
+                try {
+                    const id = await store.saveDevice(name);
+                    row.innerHTML = `<span style="font-size:12.5px;color:var(--s2xx);font-weight:600">${esc(L.deviceSaved(name))}</span>`;
+                    if (!store.isEncrypted) {
+                        statusEl.style.display = 'block';
+                        setStatus(L.storageError, 'error');
+                    }
+                    if (typeof onSaved === 'function') onSaved(id, name);
+                } catch (e) {
+                    btn.disabled = false;
                     statusEl.style.display = 'block';
-                    setStatus(L.storageError, 'error');
+                    setStatus(e.message || L.storageError, 'error');
                 }
-                if (typeof onSaved === 'function') onSaved(id, name);
             });
 
             return row;
@@ -450,7 +458,7 @@
 
         // ── DEVICES tab ───────────────────────────────────────────────
         async function renderDevices() {
-            body.innerHTML = '<p class="p2ps-hint" style="margin:0;color:#888;font-size:12px">جاري تحميل الأجهزة...</p>';
+            body.innerHTML = `<p class="p2ps-hint" style="margin:0;color:var(--dim);font-size:12px">${esc(L.loadingDevices)}</p>`;
 
             const devices = await store.getAll();
 
@@ -505,22 +513,30 @@
                         const startBtn = body.querySelector('[data-act="start"]');
                         if (startBtn) startBtn.click();
                         // After a successful connection, auto-touch lastSeen
-                        await store.touchDevice(dev.id);
+                        try { await store.touchDevice(dev.id); } catch (e) { /* ignore */ }
                     });
 
                     // Rename
                     card.querySelector('.rename').addEventListener('click', async () => {
                         const newName = window.prompt(`${L.renameDevice} — ${dev.name}`, dev.name);
-                        if (newName === null) return;
-                        await store.renameDevice(dev.id, newName);
-                        renderDevices();
+                        if (newName === null || !newName.trim()) return;
+                        try {
+                            await store.renameDevice(dev.id, newName.trim());
+                            renderDevices();
+                        } catch (e) {
+                            alert(e.message || 'Error renaming device');
+                        }
                     });
 
                     // Delete
                     card.querySelector('.del').addEventListener('click', async () => {
                         if (!window.confirm(L.confirmDelete)) return;
-                        await store.removeDevice(dev.id);
-                        renderDevices();
+                        try {
+                            await store.removeDevice(dev.id);
+                            renderDevices();
+                        } catch (e) {
+                            alert(e.message || 'Error deleting device');
+                        }
                     });
 
                     list.appendChild(card);
