@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HAR Inspector — تحويل HAR إلى JSON</title>
+<title>HAR Inspector — HAR to JSON</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./src/style/style.css">
@@ -14,6 +14,10 @@
   var t = 'paper';
   try { t = localStorage.getItem('harTheme') || 'paper'; } catch (e) {}
   document.documentElement.setAttribute('data-theme', t);
+  var lang = 'ar';
+  try { lang = localStorage.getItem('harLang') || 'ar'; } catch(e) {}
+  document.documentElement.setAttribute('lang', lang);
+  document.documentElement.setAttribute('dir', lang === 'en' ? 'ltr' : 'rtl');
 })();
 </script>
 
@@ -31,7 +35,7 @@
   </div>
   <div class="spacer"></div>
   <div class="stats" id="stats" style="display:none;">
-    <span>الطلبات <b id="statTotal">0</b></span>
+    <span><span id="statLabel">الطلبات</span> <b id="statTotal">0</b></span>
     <div class="strip" id="statStrip"></div>
   </div>
   <div class="theme-switch" id="themeSwitch">
@@ -40,53 +44,32 @@
     <button class="theme-swatch" data-theme="phosphor" title="Phosphor" style="background:conic-gradient(from 180deg, #39C97A 0deg 180deg, #040A05 180deg 360deg);"></button>
     <button class="theme-swatch" data-theme="amber" title="Amber" style="background:conic-gradient(from 180deg, #E8930A 0deg 180deg, #140D03 180deg 360deg);"></button>
   </div>
+  <button class="btn lang-toggle" id="langBtn" title="Switch language">EN</button>
   <input type="file" id="fileInput" accept=".har,application/json">
-  <button class="btn" id="loadBtn">فتح ملف HAR</button>
-  <button class="btn" id="shareBtn">مشاركة مباشرة</button>
-  <button class="btn" id="devicesBtn" title="الأجهزة المحفوظة">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align:-2px">
-      <rect x="2" y="3" width="9" height="14" rx="1.5" stroke="currentColor" stroke-width="1.7"/>
-      <rect x="13" y="7" width="9" height="10" rx="1.5" stroke="currentColor" stroke-width="1.7"/>
-      <path d="M6 17v2M18 17v2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-    </svg>
-    الأجهزة
-  </button>
-  <button class="btn primary" id="downloadBtn" disabled>تنزيل JSON</button>
-  <a class="btn" href="./workflow.html" title="شرح مرئي لعملية المشاركة المباشرة" style="text-decoration:none;">
+  <button class="btn" id="loadBtn" data-i18n="loadBtn">فتح ملف HAR</button>
+  <button class="btn" id="shareBtn" data-i18n="shareBtn">مشاركة مباشرة</button>
+  <button class="btn primary" id="downloadBtn" disabled data-i18n="downloadBtn">تنزيل JSON</button>
+  <a class="btn" id="howLink" href="./workflow.html" style="text-decoration:none;" data-i18n-title="howTitle">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
       <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
       <path d="M12 11v5.5M12 7.2v.3" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
     </svg>
-    كيف تعمل؟
+    <span data-i18n="howBtn">كيف تعمل؟</span>
   </a>
 </header>
-
-<div class="overlay" id="shareOverlay">
-  <div class="modal">
-    <div class="modal-head">
-      <h3>مشاركة مباشرة بين متصفحين</h3>
-      <button class="modal-close" id="shareClose">✕</button>
-    </div>
-    <div class="modal-tabs">
-      <div class="tab active" data-share-tab="host">أنا هستضيف</div>
-      <div class="tab" data-share-tab="join">هستقبل مشاركة</div>
-    </div>
-    <div class="modal-body" id="shareBody"></div>
-  </div>
-</div>
 
 <main id="main">
   <div class="dropzone" id="dropzone">
     <svg class="mark" width="34" height="34" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
-    <h2>حوّل ملف HAR إلى JSON مبسّط</h2>
-    <p>ارفع ملف HAR وهيتم استخراج الأساسيات بس لكل طلب: الرابط، status code، بيانات الـ request (params/body)، وبيانات الـ response — من غير أي تفاصيل زيادة.</p>
+    <h2 data-i18n="dropTitle">حوّل ملف HAR إلى JSON مبسّط</h2>
+    <p data-i18n="dropDesc">ارفع ملف HAR وهيتم استخراج الأساسيات بس لكل طلب: الرابط، status code، بيانات الـ request (params/body)، وبيانات الـ response — من غير أي تفاصيل زيادة.</p>
     <div class="zone" id="zone">
       <span class="corner tl"></span><span class="corner tr"></span>
       <span class="corner bl"></span><span class="corner br"></span>
-      <b>اسحب ملف HAR هنا</b>
-      <span class="sub">أو اضغط للاختيار من جهازك — .har</span>
+      <b data-i18n="dropZoneLabel">اسحب ملف HAR هنا</b>
+      <span class="sub" data-i18n="dropZoneSub">أو اضغط للاختيار من جهازك — .har</span>
     </div>
   </div>
 </main>
