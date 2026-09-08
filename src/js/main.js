@@ -14,11 +14,15 @@
     const langBtn    = document.getElementById('langBtn');
 
     // ── App state ─────────────────────────────────────────────────────────
-    let simplified  = [];
-    let activeIndex = null;
-    let selected    = new Set();
-    let currentPage = 1;
-    let pageSize    = (() => { try { return parseInt(localStorage.getItem('harPageSize')) || 50; } catch(e) { return 50; } })();
+    let simplified     = [];
+    let activeIndex    = null;
+    let selected       = new Set();
+    let currentPage    = 1;
+    let pageSize       = (() => { try { return parseInt(localStorage.getItem('harPageSize')) || 50; } catch(e) { return 50; } })();
+    let filterText     = '';
+    let selectedOrigin = 'all';
+    let selectedType   = 'all';
+    let excludeAssets  = false;
 
     // ── Translations ──────────────────────────────────────────────────────
     const STRINGS = {
@@ -33,7 +37,22 @@
             dropDesc:        'ارفع ملف HAR وهيتم استخراج الأساسيات بس لكل طلب: الرابط، status code، بيانات الـ request (params/body)، وبيانات الـ response — من غير أي تفاصيل زيادة.',
             dropZoneLabel:   'اسحب ملف HAR هنا',
             dropZoneSub:     'أو اضغط للاختيار من جهازك — .har',
-            filterPh:        'فلترة بالرابط أو method...',
+            filterPh:        'بحث بالرابط، المسار، النطاق (Origin)...',
+            allOrigins:      'جميع النطاقات (Origins)',
+            originTitle:     'النطاق',
+            typeAll:         'الكل',
+            typeXhr:         'Fetch/XHR',
+            typeFont:        'خطوط',
+            typeImg:         'صور',
+            typeJs:          'JS',
+            typeCss:         'CSS',
+            typeAsset:       'أصول ثابتة',
+            typeDoc:         'مستندات',
+            typeOther:       'أخرى',
+            excludeAssets:   'استبعاد الملفات الثابتة والخطوط',
+            excludeAssetsTitle:'إخفاء الخطوط والصور والتنسيقات والملفات الثابتة والترجمات',
+            clearFilter:     'مسح البحث',
+            showingFiltered: (shown, total) => `${shown} من ${total}`,
             selectAll:       'تحديد الكل',
             selected:        (n) => `${n} محدد`,
             downloadSel:     'تنزيل المحدد',
@@ -66,7 +85,22 @@
             dropDesc:        'Upload a HAR file and only the essentials are extracted per request: URL, status code, request data (params/body), and response data — no extra noise.',
             dropZoneLabel:   'Drag a HAR file here',
             dropZoneSub:     'or click to pick from your device — .har',
-            filterPh:        'Filter by URL or method...',
+            filterPh:        'Filter by URL, path, origin, method...',
+            allOrigins:      'All Origins',
+            originTitle:     'Origin',
+            typeAll:         'All',
+            typeXhr:         'Fetch/XHR',
+            typeFont:        'Fonts',
+            typeImg:         'Images',
+            typeJs:          'JS',
+            typeCss:         'CSS',
+            typeAsset:       'Assets',
+            typeDoc:         'Docs',
+            typeOther:       'Other',
+            excludeAssets:   'Exclude Assets & Fonts',
+            excludeAssetsTitle:'Hide fonts, images, stylesheets, static assets and translations',
+            clearFilter:     'Clear search',
+            showingFiltered: (shown, total) => `${shown} of ${total}`,
             selectAll:       'Select all',
             selected:        (n) => `${n} selected`,
             downloadSel:     'Download selected',
@@ -189,10 +223,14 @@
                 : simplified),
             itemCount:      () => (selected.size || simplified.length),
             onDataReceived: (data) => {
-                simplified  = data;
-                selected    = new Set();
-                activeIndex = null;
-                currentPage = 1;
+                simplified     = (data || []).map(ensureItemProps);
+                selected       = new Set();
+                activeIndex    = null;
+                currentPage    = 1;
+                filterText     = '';
+                selectedOrigin = 'all';
+                selectedType   = 'all';
+                excludeAssets  = false;
                 renderList();
                 buildStats();
                 downloadBtn.disabled = false;
@@ -239,10 +277,14 @@
                 const har     = JSON.parse(evt.target.result);
                 const entries = (har.log && har.log.entries) ? har.log.entries : [];
                 if (!entries.length) { alert(t('badFile')); return; }
-                simplified  = entries.map(simplifyEntry);
-                selected    = new Set();
-                activeIndex = null;
-                currentPage = 1;
+                simplified     = entries.map(simplifyEntry);
+                selected       = new Set();
+                activeIndex    = null;
+                currentPage    = 1;
+                filterText     = '';
+                selectedOrigin = 'all';
+                selectedType   = 'all';
+                excludeAssets  = false;
                 renderList();
                 buildStats();
                 downloadBtn.disabled = false;
@@ -251,6 +293,121 @@
             }
         };
         reader.readAsText(file);
+    }
+
+    // ── URL & Resource Type Helpers ─────────────────────────────────────────
+    function parseUrlInfo(rawUrl) {
+        let origin = '';
+        let host = '';
+        let pathname = '';
+        try {
+            const u = new URL(rawUrl || '');
+            origin = u.origin || 'other';
+            host = u.host || 'other';
+            pathname = (u.pathname || '/') + (u.search || '');
+        } catch (e) {
+            origin = 'other';
+            host = 'other';
+            pathname = rawUrl || '';
+        }
+        return { origin, host, pathname };
+    }
+
+    function detectResourceType(entry, url, mimeType) {
+        const lowerUrl = (url || '').toLowerCase();
+        const lowerMime = (mimeType || '').toLowerCase();
+        const entryType = (entry && entry._resourceType ? String(entry._resourceType).toLowerCase() : '');
+
+        // Check font extensions or mime
+        if (entryType === 'font' || /\.(woff2?|ttf|otf|eot)(\?.*)?$/i.test(lowerUrl) || lowerMime.includes('font') || lowerMime.includes('opentype') || lowerMime.includes('truetype')) {
+            return 'font';
+        }
+
+        // Check image extensions or mime
+        if (entryType === 'image' || /\.(png|jpe?g|gif|svg|webp|ico|avif|bmp)(\?.*)?$/i.test(lowerUrl) || lowerMime.startsWith('image/')) {
+            return 'image';
+        }
+
+        // Check stylesheet / CSS
+        if (entryType === 'stylesheet' || /\.css(\?.*)?$/i.test(lowerUrl) || lowerMime.includes('text/css')) {
+            return 'css';
+        }
+
+        // Check scripts / JS
+        if (entryType === 'script' || /\.(js|mjs)(\?.*)?$/i.test(lowerUrl) || lowerMime.includes('javascript') || lowerMime.includes('ecmascript')) {
+            return 'js';
+        }
+
+        // Check media (audio / video)
+        if (entryType === 'media' || /\.(mp4|webm|ogg|mp3|wav|flac|aac)(\?.*)?$/i.test(lowerUrl) || lowerMime.startsWith('audio/') || lowerMime.startsWith('video/')) {
+            return 'media';
+        }
+
+        // Check document / HTML
+        if (entryType === 'document' || /\.html?(\?.*)?$/i.test(lowerUrl) || lowerMime.includes('text/html')) {
+            return 'doc';
+        }
+
+        // Check static assets / translations / local json assets (e.g. /assets/assets/translations/ar.json)
+        if (/\/assets\/|\/static\/|\/translations\/|\/locales\/|\/i18n\/|\/public\//i.test(lowerUrl)) {
+            return 'asset';
+        }
+
+        // Check fetch / xhr / json api
+        if (entryType === 'xhr' || entryType === 'fetch' || lowerMime.includes('json') || lowerMime.includes('xml')) {
+            return 'xhr';
+        }
+
+        return 'other';
+    }
+
+    function isStaticAsset(item) {
+        if (!item) return false;
+        const rt = item.resourceType;
+        if (rt === 'font' || rt === 'image' || rt === 'css' || rt === 'js' || rt === 'media' || rt === 'asset') {
+            return true;
+        }
+        const lowerUrl = (item.url || '').toLowerCase();
+        if (/\/assets\/|\/static\/|\/translations\/|\/locales\/|\/i18n\/|\/public\//i.test(lowerUrl)) {
+            return true;
+        }
+        if (/\.(woff2?|ttf|otf|eot|png|jpe?g|gif|svg|webp|ico|avif|bmp|css|js|mjs|mp4|webm|mp3)(\?.*)?$/i.test(lowerUrl)) {
+            return true;
+        }
+        return false;
+    }
+
+    function ensureItemProps(item) {
+        if (!item) return item;
+        if (!item.origin || !item.host || !item.pathname) {
+            const u = parseUrlInfo(item.url || '');
+            item.origin = item.origin || u.origin;
+            item.host = item.host || u.host;
+            item.pathname = item.pathname || u.pathname;
+        }
+        if (!item.resourceType) {
+            item.resourceType = detectResourceType(null, item.url || '', item.mimeType || '');
+        }
+        return item;
+    }
+
+    function getOriginCounts() {
+        const counts = new Map();
+        simplified.forEach(item => {
+            const o = item.origin || 'other';
+            counts.set(o, (counts.get(o) || 0) + 1);
+        });
+        return counts;
+    }
+
+    function getTypeCounts() {
+        const counts = { all: simplified.length, xhr: 0, asset: 0, font: 0, image: 0, js: 0, css: 0, doc: 0, other: 0 };
+        simplified.forEach(item => {
+            const t = item.resourceType;
+            if (counts[t] !== undefined) counts[t]++;
+            else counts.other++;
+        });
+        return counts;
     }
 
     function simplifyEntry(entry) {
@@ -275,12 +432,20 @@
                 try { responseBody = JSON.parse(responseBody); } catch (e) { /* keep string */ }
             }
         }
+        const mimeType = (res.content && res.content.mimeType) || '';
+        const urlInfo = parseUrlInfo(req.url || '');
+        const resourceType = detectResourceType(entry, req.url || '', mimeType);
+
         return {
             method: req.method || 'GET',
             url: req.url || '',
+            origin: urlInfo.origin,
+            host: urlInfo.host,
+            pathname: urlInfo.pathname,
+            resourceType: resourceType,
             status: res.status || 0,
             statusText: res.statusText || '',
-            mimeType: (res.content && res.content.mimeType) || '',
+            mimeType: mimeType,
             time: entry.time || 0,
             sentAt: entry.startedDateTime || null,
             requestParams: { query: queryParams, body: postParams },
@@ -306,12 +471,66 @@
 
     // ── List rendering ─────────────────────────────────────────────────────
     function renderList() {
+        const originCounts = getOriginCounts();
+        let originOptionsHtml = `<option value="all">${escapeHtml(t('allOrigins'))} (${simplified.length})</option>`;
+        Array.from(originCounts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .forEach(([orig, cnt]) => {
+                const selectedAttr = orig === selectedOrigin ? ' selected' : '';
+                originOptionsHtml += `<option value="${escapeHtml(orig)}"${selectedAttr}>${escapeHtml(orig)} (${cnt})</option>`;
+            });
+
+        const typeCounts = getTypeCounts();
+        const typeKeys = [
+            { key: 'all', label: t('typeAll') },
+            { key: 'xhr', label: t('typeXhr') },
+            { key: 'asset', label: t('typeAsset') },
+            { key: 'font', label: t('typeFont') },
+            { key: 'image', label: t('typeImg') },
+            { key: 'js', label: t('typeJs') },
+            { key: 'css', label: t('typeCss') },
+            { key: 'doc', label: t('typeDoc') },
+            { key: 'other', label: t('typeOther') },
+        ];
+        const typePillsHtml = typeKeys
+            .filter(tk => tk.key === 'all' || (typeCounts[tk.key] || 0) > 0)
+            .map(tk => {
+                const active = tk.key === selectedType ? ' active' : '';
+                const cnt = typeCounts[tk.key] || 0;
+                return `<button class="type-pill${active}" data-type="${tk.key}">${escapeHtml(tk.label)} <span class="count">${cnt}</span></button>`;
+            }).join('');
+
         main.innerHTML = `
       <div class="list" id="listPane">
-        <div class="filterbar"><input id="filterInput" placeholder="${escapeHtml(t('filterPh'))}"></div>
+        <div class="filterbar" id="filterBar">
+          <div class="filter-search-row">
+            <div class="search-wrap">
+              <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input id="filterInput" placeholder="${escapeHtml(t('filterPh'))}" value="${escapeHtml(filterText)}">
+              <button class="clear-input-btn" id="clearFilterBtn" style="${filterText ? '' : 'display:none;'}" title="${escapeHtml(t('clearFilter'))}">✕</button>
+            </div>
+            <select id="originFilter" class="origin-select" title="${escapeHtml(t('originTitle'))}">
+              ${originOptionsHtml}
+            </select>
+          </div>
+          <div class="filter-pills-row">
+            <div class="type-pills" id="typePills">${typePillsHtml}</div>
+            <button class="exclude-assets-btn${excludeAssets ? ' active' : ''}" id="excludeAssetsBtn" title="${escapeHtml(t('excludeAssetsTitle'))}">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+              </svg>
+              <span>${escapeHtml(t('excludeAssets'))}</span>
+            </button>
+          </div>
+        </div>
         <div class="selectbar">
-          <label class="selall"><input type="checkbox" id="selectAllChk"> ${escapeHtml(t('selectAll'))}</label>
+          <label class="selall"><input type="checkbox" id="selectAllChk"> <span id="selAllLabel">${escapeHtml(t('selectAll'))}</span></label>
           <span class="sel-spacer"></span>
+          <span class="filter-count" id="filterCount"></span>
           <span class="sel-count" id="selCount"></span>
           <button class="btn small" id="downloadSelectedBtn" style="display:none;">${escapeHtml(t('downloadSel'))}</button>
         </div>
@@ -322,29 +541,104 @@
         <div class="detail-empty">${escapeHtml(t('detailEmpty'))}</div>
       </div>
     `;
-        document.getElementById('filterInput').addEventListener('input', e => {
+
+        const filterInput = document.getElementById('filterInput');
+        const clearBtn    = document.getElementById('clearFilterBtn');
+        const originSelect= document.getElementById('originFilter');
+        const excludeBtn  = document.getElementById('excludeAssetsBtn');
+
+        filterInput.addEventListener('input', e => {
+            filterText = e.target.value;
+            if (clearBtn) clearBtn.style.display = filterText ? 'inline-block' : 'none';
             currentPage = 1;
-            paintRows(e.target.value);
+            paintRows();
         });
+
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => {
+                filterText = '';
+                filterInput.value = '';
+                clearBtn.style.display = 'none';
+                currentPage = 1;
+                filterInput.focus();
+                paintRows();
+            });
+        }
+
+        if (originSelect) {
+            originSelect.addEventListener('change', e => {
+                selectedOrigin = e.target.value;
+                currentPage = 1;
+                paintRows();
+            });
+        }
+
+        if (excludeBtn) {
+            excludeBtn.addEventListener('click', () => {
+                excludeAssets = !excludeAssets;
+                excludeBtn.classList.toggle('active', excludeAssets);
+                currentPage = 1;
+                paintRows();
+            });
+        }
+
+        document.querySelectorAll('#typePills .type-pill').forEach(pill => {
+            pill.addEventListener('click', () => {
+                selectedType = pill.dataset.type;
+                document.querySelectorAll('#typePills .type-pill').forEach(p => p.classList.toggle('active', p.dataset.type === selectedType));
+                currentPage = 1;
+                paintRows();
+            });
+        });
+
         document.getElementById('selectAllChk').addEventListener('change', e => {
-            const filter = document.getElementById('filterInput').value;
-            const idxs   = getFilteredIndices(filter);
+            const idxs = getFilteredIndices();
             if (e.target.checked) idxs.forEach(i => selected.add(i));
             else idxs.forEach(i => selected.delete(i));
-            paintRows(filter);
+            paintRows();
         });
+
         document.getElementById('downloadSelectedBtn').addEventListener('click', () => {
             const items = Array.from(selected).sort((a, b) => a - b).map(i => simplified[i]);
             downloadJSON(items, 'har-selected.json');
         });
-        paintRows('');
+
+        paintRows();
     }
 
-    function getFilteredIndices(filter) {
-        const f = (filter || '').toLowerCase();
+    function getFilteredIndices() {
+        const text = (filterText || '').trim().toLowerCase();
         const idxs = [];
         simplified.forEach((item, i) => {
-            if (f && !(item.url.toLowerCase().includes(f) || item.method.toLowerCase().includes(f))) return;
+            // Origin filter
+            if (selectedOrigin && selectedOrigin !== 'all' && item.origin !== selectedOrigin) {
+                return;
+            }
+
+            // Exclude assets toggle
+            if (excludeAssets && isStaticAsset(item)) {
+                return;
+            }
+
+            // Type pill filter
+            if (selectedType && selectedType !== 'all') {
+                if (selectedType === 'image') {
+                    if (item.resourceType !== 'image' && item.resourceType !== 'img') return;
+                } else if (item.resourceType !== selectedType) {
+                    return;
+                }
+            }
+
+            // Text search (URL, path, origin, method, status)
+            if (text) {
+                const match = item.url.toLowerCase().includes(text) ||
+                              item.method.toLowerCase().includes(text) ||
+                              (item.origin && item.origin.toLowerCase().includes(text)) ||
+                              (item.host && item.host.toLowerCase().includes(text)) ||
+                              String(item.status).includes(text);
+                if (!match) return;
+            }
+
             idxs.push(i);
         });
         return idxs;
@@ -378,8 +672,10 @@
           </span>` : '';
 
         bar.innerHTML = `
-        <div class="page-size-group">${sizePills}</div>
-        <span class="page-size-label">${escapeHtml(t('perPage'))}</span>
+        <div class="page-size-wrap">
+          <div class="page-size-group">${sizePills}</div>
+          <span class="page-size-label">${escapeHtml(t('perPage'))}</span>
+        </div>
         ${navHtml}
       `;
 
@@ -388,30 +684,27 @@
                 pageSize    = parseInt(btn.dataset.size);
                 currentPage = 1;
                 try { localStorage.setItem('harPageSize', pageSize); } catch(e) {}
-                const filter = document.getElementById('filterInput')?.value || '';
-                paintRows(filter);
+                paintRows();
             });
         });
         if (showNav) {
             document.getElementById('prevPageBtn')?.addEventListener('click', () => {
                 currentPage--;
-                const filter = document.getElementById('filterInput')?.value || '';
-                paintRows(filter);
+                paintRows();
             });
             document.getElementById('nextPageBtn')?.addEventListener('click', () => {
                 currentPage++;
-                const filter = document.getElementById('filterInput')?.value || '';
-                paintRows(filter);
+                paintRows();
             });
         }
     }
 
-    function paintRows(filter) {
+    function paintRows() {
         const rows = document.getElementById('rows');
         if (!rows) return;
         rows.innerHTML = '';
 
-        const allIdxs = getFilteredIndices(filter);
+        const allIdxs = getFilteredIndices();
         const total   = allIdxs.length;
 
         // Paginate
@@ -433,19 +726,26 @@
           <input type="checkbox" class="row-chk" ${selected.has(i) ? 'checked' : ''}>
           <span class="method ${item.method}">${item.method}</span>
           <span class="status ${sc}">${item.status || '—'}</span>
+          <span class="type-badge ${item.resourceType}">${item.resourceType.toUpperCase()}</span>
+          <span class="row-origin" title="${escapeHtml(item.origin)}">${escapeHtml(item.host || item.origin)}</span>
           <span class="row-time">${Math.round(item.time)}ms</span>
         </div>
-        <div class="row-url">${escapeHtml(item.url)}</div>
+        <div class="row-url" title="${escapeHtml(item.url)}">${escapeHtml(item.pathname || item.url)}</div>
       `;
             const chk = row.querySelector('.row-chk');
             chk.addEventListener('click', e => e.stopPropagation());
             chk.addEventListener('change', () => {
                 if (chk.checked) selected.add(i); else selected.delete(i);
-                paintRows(filter);
+                paintRows();
             });
-            row.addEventListener('click', () => { activeIndex = i; paintRows(filter); showDetail(i); });
+            row.addEventListener('click', () => { activeIndex = i; paintRows(); showDetail(i); });
             rows.appendChild(row);
         });
+
+        const filterCountEl = document.getElementById('filterCount');
+        if (filterCountEl) {
+            filterCountEl.textContent = t('showingFiltered', total, simplified.length);
+        }
 
         updateSelectionUI(allIdxs);
         renderPaginationBar(total);
@@ -484,6 +784,8 @@
         <div class="meta">
           <span class="meta-item">${item.method}</span>
           <span class="meta-item" style="color:${statusColorVar(item.status)}">${item.status} ${escapeHtml(item.statusText)}</span>
+          <span class="meta-item type-badge ${item.resourceType}">${escapeHtml(item.resourceType.toUpperCase())}</span>
+          <span class="meta-item origin-meta">${escapeHtml(t('originTitle'))}: <b>${escapeHtml(item.origin)}</b></span>
           <span class="meta-item">${escapeHtml(item.mimeType || 'unknown type')}</span>
           <span class="meta-item">${Math.round(item.time)} ms</span>
         </div>
