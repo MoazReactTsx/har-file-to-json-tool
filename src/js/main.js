@@ -218,10 +218,8 @@
 
     function buildShareModal() {
         return createP2PShareModal({
-            getPayload:     () => (selected.size
-                ? Array.from(selected).sort((a, b) => a - b).map(i => simplified[i])
-                : simplified),
-            itemCount:      () => (selected.size || simplified.length),
+            getPayload:     () => getActivePayload(),
+            itemCount:      () => getActivePayload().length,
             onDataReceived: (data) => {
                 simplified     = (data || []).map(ensureItemProps);
                 selected       = new Set();
@@ -644,6 +642,18 @@
         return idxs;
     }
 
+    function getActivePayload() {
+        const filteredIdxs = getFilteredIndices();
+        if (selected.size > 0) {
+            const filteredSelected = filteredIdxs.filter(i => selected.has(i));
+            if (filteredSelected.length > 0) {
+                return filteredSelected.map(i => simplified[i]);
+            }
+            return Array.from(selected).sort((a, b) => a - b).map(i => simplified[i]);
+        }
+        return filteredIdxs.map(i => simplified[i]);
+    }
+
     const PAGE_SIZES = [25, 50, 100, 0]; // 0 = All
 
     function renderPaginationBar(totalFiltered) {
@@ -747,6 +757,13 @@
             filterCountEl.textContent = t('showingFiltered', total, simplified.length);
         }
 
+        const activePayload = getActivePayload();
+        if (downloadBtn) {
+            downloadBtn.disabled = activePayload.length === 0;
+            const countSuffix = activePayload.length ? ` (${activePayload.length})` : '';
+            downloadBtn.textContent = `${t('downloadBtn')}${countSuffix}`;
+        }
+
         updateSelectionUI(allIdxs);
         renderPaginationBar(total);
     }
@@ -846,8 +863,12 @@
 
     // ── Download ───────────────────────────────────────────────────────────
     downloadBtn.addEventListener('click', () => {
-        if (!simplified.length) return;
-        downloadJSON(simplified, 'har-simplified.json');
+        const payload = getActivePayload();
+        if (!payload.length) return;
+        const filename = (selected.size > 0)
+            ? 'har-selected.json'
+            : (getFilteredIndices().length < simplified.length ? 'har-filtered.json' : 'har-simplified.json');
+        downloadJSON(payload, filename);
     });
 
     function downloadJSON(data, filename) {
