@@ -420,6 +420,20 @@
          */
         async acceptAnswer(answerCode) {
             if (!this.pc) throw new Error('لا يوجد offer نشط — ابدأ المشاركة الأول.');
+            // Guard: setRemoteDescription(answer) is only valid while the
+            // connection is waiting on an answer (signalingState
+            // 'have-local-offer'). Calling it again afterwards — e.g. the
+            // user double-clicks "Connect", or re-pastes the same code once
+            // already connected — throws "Called in wrong state: stable"
+            // from the browser. Treat that as a no-op / clear message
+            // instead of letting the raw DOMException surface.
+            if (this.pc.signalingState === 'stable') {
+                this.onStatus('connected-sent');
+                return;
+            }
+            if (this.pc.signalingState !== 'have-local-offer') {
+                throw new Error('الاتصال في حالة غير متوقعة — ابدأ المشاركة من جديد.');
+            }
             let desc;
             try {
                 desc = P2PShare.decode(answerCode);

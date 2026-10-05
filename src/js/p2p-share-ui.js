@@ -326,14 +326,20 @@
                 setStatus(L.waitingAnswer, 'pending');
 
                 body.querySelector('[data-act="copyOffer"]').addEventListener('click', () => copyText(offerCode));
-                body.querySelector('[data-act="connect"]').addEventListener('click', async () => {
+                const connectBtn = body.querySelector('[data-act="connect"]');
+                connectBtn.addEventListener('click', async () => {
                     const code = body.querySelector('[data-el="answerInput"]').value;
                     if (!code.trim()) return;
+                    // Prevent a double-click (or a slow first attempt + impatient
+                    // second click) from calling acceptAnswer() twice on the same
+                    // connection — that's what throws "Called in wrong state: stable".
+                    connectBtn.disabled = true;
                     try {
                         await share.acceptAnswer(code);
                         setStatus(L.connecting, 'pending');
                     } catch (e) {
                         setStatus(e.message || L.badAnswer, 'error');
+                        connectBtn.disabled = false;
                     }
                 });
             });
