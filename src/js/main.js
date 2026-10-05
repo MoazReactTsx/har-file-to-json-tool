@@ -73,6 +73,14 @@
             sectionQuery:    'Query Params',
             sectionBody:     'Body / Post Data',
             sectionResponse: 'Response Body',
+            jsonSearchPh:    'بحث في المفاتيح والقيم...',
+            jsonCopy:        'نسخ',
+            jsonCopied:      'تم النسخ!',
+            jsonExpandAll:   'توسيع الكل',
+            jsonCollapseAll: 'طي الكل',
+            jsonItems:       (n) => `${n} عنصر`,
+            showAsJson:      'عرض كـ JSON',
+            jsonViewerTitle: (n) => `عرض JSON — ${n} طلب`,
         },
         en: {
             loadBtn:         'Open HAR File',
@@ -121,6 +129,14 @@
             sectionQuery:    'Query Params',
             sectionBody:     'Body / Post Data',
             sectionResponse: 'Response Body',
+            jsonSearchPh:    'Search keys & values...',
+            jsonCopy:        'Copy',
+            jsonCopied:      'Copied!',
+            jsonExpandAll:   'Expand all',
+            jsonCollapseAll: 'Collapse all',
+            jsonItems:       (n) => `${n} item${n === 1 ? '' : 's'}`,
+            showAsJson:      'Show as JSON',
+            jsonViewerTitle: (n) => `JSON View — ${n} request${n === 1 ? '' : 's'}`,
         },
     };
 
@@ -531,6 +547,10 @@
           <span class="filter-count" id="filterCount"></span>
           <span class="sel-count" id="selCount"></span>
           <button class="btn small" id="downloadSelectedBtn" style="display:none;">${escapeHtml(t('downloadSel'))}</button>
+          <button class="btn small show-json-btn" id="showAsJsonBtn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            ${escapeHtml(t('showAsJson'))}
+          </button>
         </div>
         <div class="paginationbar" id="paginationBar"></div>
         <div class="rows" id="rows"></div>
@@ -599,6 +619,10 @@
         document.getElementById('downloadSelectedBtn').addEventListener('click', () => {
             const items = Array.from(selected).sort((a, b) => a - b).map(i => simplified[i]);
             downloadJSON(items, 'har-selected.json');
+        });
+
+        document.getElementById('showAsJsonBtn').addEventListener('click', () => {
+            openJsonViewer(getActivePayload());
         });
 
         paintRows();
@@ -816,21 +840,256 @@
     `;
 
         const tabBody = document.getElementById('tabBody');
-        function paintTab(tab) {
-            if (tab === 'request') {
-                tabBody.innerHTML = `
-          <div class="section-title">${t('sectionQuery')}</div>
-          ${item.requestParams.query.length ? `<pre>${escapeHtml(queryStr)}</pre>` : `<p class="empty-note">${t('noQueryParams')}</p>`}
-          <div class="section-title" style="margin-top:20px;">${t('sectionBody')}</div>
-          <pre>${escapeHtml(bodyStr)}</pre>
-        `;
-            } else if (tab === 'response') {
-                tabBody.innerHTML = `
-          <div class="section-title">${t('sectionResponse')}</div>
-          <pre>${escapeHtml(responseStr)}</pre>
-        `;
+
+        // ── JSON Preview helpers ────────────────────────────────────────────
+        function buildJsonPreview(data, containerId) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'json-preview-wrap';
+
+            // Toolbar
+            const toolbar = document.createElement('div');
+            toolbar.className = 'json-toolbar';
+
+            const searchInput = document.createElement('input');
+            searchInput.className = 'json-search';
+            searchInput.placeholder = t('jsonSearchPh');
+            searchInput.dir = 'ltr';
+
+            const toolbarRight = document.createElement('div');
+            toolbarRight.className = 'json-toolbar-right';
+
+            const expandBtn = document.createElement('button');
+            expandBtn.className = 'json-tool-btn';
+            expandBtn.textContent = t('jsonExpandAll');
+
+            const collapseBtn = document.createElement('button');
+            collapseBtn.className = 'json-tool-btn';
+            collapseBtn.textContent = t('jsonCollapseAll');
+
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'json-tool-btn json-copy-btn';
+            copyBtn.textContent = t('jsonCopy');
+
+            toolbarRight.append(expandBtn, collapseBtn, copyBtn);
+            toolbar.append(searchInput, toolbarRight);
+            wrapper.appendChild(toolbar);
+
+            // Tree container
+            const treeEl = document.createElement('div');
+            treeEl.className = 'json-tree';
+            treeEl.dir = 'ltr';
+            wrapper.appendChild(treeEl);
+
+            function renderNode(val, key, depth, parentEl, isLast) {
+                const indent = depth * 16;
+                const isObj  = val !== null && typeof val === 'object' && !Array.isArray(val);
+                const isArr  = Array.isArray(val);
+                const isComplex = isObj || isArr;
+
+                const row = document.createElement('div');
+                row.className = 'jn-row';
+                row.style.paddingInlineStart = indent + 'px';
+
+                if (isComplex) {
+                    const childCount = isArr ? val.length : Object.keys(val).length;
+                    const openBrace  = isArr ? '[' : '{';
+                    const closeBrace = isArr ? ']' : '}';
+
+                    const toggle = document.createElement('span');
+                    toggle.className = 'jn-toggle open';
+                    toggle.textContent = '▾';
+
+                    const keySpan = document.createElement('span');
+                    if (key !== null) {
+                        keySpan.innerHTML = `<span class="jk">${escapeHtml(JSON.stringify(key))}</span><span class="jp">: </span>`;
+                    }
+
+                    const braceOpen = document.createElement('span');
+                    braceOpen.className = 'jb';
+                    braceOpen.textContent = openBrace;
+
+                    const countBadge = document.createElement('span');
+                    countBadge.className = 'jn-count';
+                    countBadge.textContent = t('jsonItems', childCount);
+
+                    const ellipsis = document.createElement('span');
+                    ellipsis.className = 'jn-ellipsis';
+                    ellipsis.textContent = '…';
+                    ellipsis.style.display = 'none';
+
+                    row.append(toggle, keySpan, braceOpen, countBadge, ellipsis);
+                    parentEl.appendChild(row);
+
+                    const childWrap = document.createElement('div');
+                    childWrap.className = 'jn-children';
+
+                    const entries = isArr ? val.map((v, i) => [i, v]) : Object.entries(val);
+                    entries.forEach(([k, v], idx) => {
+                        renderNode(v, isArr ? null : k, depth + 1, childWrap, idx === entries.length - 1);
+                    });
+                    parentEl.appendChild(childWrap);
+
+                    const closeRow = document.createElement('div');
+                    closeRow.className = 'jn-row';
+                    closeRow.style.paddingInlineStart = indent + 'px';
+                    closeRow.innerHTML = `<span class="jb">${closeBrace}</span>${!isLast ? '<span class="jp">,</span>' : ''}`;
+                    parentEl.appendChild(closeRow);
+
+                    toggle.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const open = toggle.classList.contains('open');
+                        toggle.classList.toggle('open', !open);
+                        toggle.textContent = open ? '▸' : '▾';
+                        childWrap.style.display = open ? 'none' : '';
+                        closeRow.style.display  = open ? 'none' : '';
+                        countBadge.style.display = open ? '' : 'none';
+                        ellipsis.style.display   = open ? 'inline' : 'none';
+                    });
+                    row.style.cursor = 'pointer';
+                    row.addEventListener('click', (e) => { if (e.target === row || e.target === braceOpen || e.target === keySpan) toggle.click(); });
+
+                } else {
+                    // Primitive
+                    let valClass = 'jv-other';
+                    if (typeof val === 'string')  valClass = 'jv-str';
+                    if (typeof val === 'number')  valClass = 'jv-num';
+                    if (typeof val === 'boolean') valClass = 'jv-bool';
+                    if (val === null)              valClass = 'jv-null';
+
+                    const keyPart = key !== null ? `<span class="jk">${escapeHtml(JSON.stringify(key))}</span><span class="jp">: </span>` : '';
+                    const valPart = `<span class="${valClass}">${escapeHtml(JSON.stringify(val))}</span>`;
+                    const comma   = !isLast ? '<span class="jp">,</span>' : '';
+                    row.innerHTML = `<span class="jn-leaf-pad"></span>${keyPart}${valPart}${comma}`;
+                    row.className = 'jn-row jn-leaf';
+                    parentEl.appendChild(row);
+                }
+            }
+
+            renderNode(data, null, 0, treeEl, true);
+
+            // Expand / Collapse all
+            function setAllOpen(open) {
+                treeEl.querySelectorAll('.jn-toggle').forEach(tog => {
+                    const isOpen = tog.classList.contains('open');
+                    if (open !== isOpen) tog.click();
+                });
+            }
+            expandBtn.addEventListener('click', () => setAllOpen(true));
+            collapseBtn.addEventListener('click', () => setAllOpen(false));
+
+            // Copy
+            copyBtn.addEventListener('click', () => {
+                const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+                navigator.clipboard.writeText(text).then(() => {
+                    copyBtn.textContent = t('jsonCopied');
+                    setTimeout(() => { copyBtn.textContent = t('jsonCopy'); }, 1800);
+                }).catch(() => {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    copyBtn.textContent = t('jsonCopied');
+                    setTimeout(() => { copyBtn.textContent = t('jsonCopy'); }, 1800);
+                });
+            });
+
+            // Search / highlight
+            let searchTerm = '';
+            searchInput.addEventListener('input', () => {
+                searchTerm = searchInput.value.trim().toLowerCase();
+                treeEl.querySelectorAll('.jn-row').forEach(row => {
+                    if (!searchTerm) {
+                        row.style.display = '';
+                        row.classList.remove('jn-match');
+                        return;
+                    }
+                    const text = row.textContent.toLowerCase();
+                    const match = text.includes(searchTerm);
+                    row.style.display = match ? '' : 'none';
+                    row.classList.toggle('jn-match', match);
+                    if (match) {
+                        // Ensure ancestor children blocks are visible
+                        let el = row.parentElement;
+                        while (el && el !== treeEl) {
+                            if (el.classList.contains('jn-children')) el.style.display = '';
+                            el = el.parentElement;
+                        }
+                    }
+                });
+            });
+
+            return wrapper;
+        }
+
+        function renderJsonOrPre(val, rawStr, container) {
+            if (typeof val === 'object' && val !== null) {
+                container.appendChild(buildJsonPreview(val, null));
             } else {
-                tabBody.innerHTML = `<pre>${escapeHtml(JSON.stringify(item, null, 2))}</pre>`;
+                const pre = document.createElement('pre');
+                pre.textContent = rawStr;
+                container.appendChild(pre);
+            }
+        }
+
+        function paintTab(tab) {
+            tabBody.innerHTML = '';
+            if (tab === 'request') {
+                const qTitle = document.createElement('div');
+                qTitle.className = 'section-title';
+                qTitle.textContent = t('sectionQuery');
+                tabBody.appendChild(qTitle);
+
+                if (item.requestParams.query.length) {
+                    const queryObj = {};
+                    item.requestParams.query.forEach(q => { queryObj[q.name] = q.value; });
+                    tabBody.appendChild(buildJsonPreview(queryObj, null));
+                } else {
+                    const emptyNote = document.createElement('p');
+                    emptyNote.className = 'empty-note';
+                    emptyNote.textContent = t('noQueryParams');
+                    tabBody.appendChild(emptyNote);
+                }
+
+                const bTitle = document.createElement('div');
+                bTitle.className = 'section-title';
+                bTitle.style.marginTop = '20px';
+                bTitle.textContent = t('sectionBody');
+                tabBody.appendChild(bTitle);
+
+                const bodyVal = item.requestParams.body;
+                if (bodyVal === null || bodyVal === undefined || bodyVal === '') {
+                    const emptyNote = document.createElement('p');
+                    emptyNote.className = 'empty-note';
+                    emptyNote.textContent = t('noBody');
+                    tabBody.appendChild(emptyNote);
+                } else {
+                    let parsedBody = bodyVal;
+                    if (typeof bodyVal === 'string') {
+                        try { parsedBody = JSON.parse(bodyVal); } catch(e) { parsedBody = bodyVal; }
+                    }
+                    renderJsonOrPre(parsedBody, typeof bodyVal === 'string' ? bodyVal : JSON.stringify(bodyVal, null, 2), tabBody);
+                }
+
+            } else if (tab === 'response') {
+                const title = document.createElement('div');
+                title.className = 'section-title';
+                title.textContent = t('sectionResponse');
+                tabBody.appendChild(title);
+
+                if (!item.response && item.response !== 0 && item.response !== false) {
+                    const emptyNote = document.createElement('p');
+                    emptyNote.className = 'empty-note';
+                    emptyNote.textContent = t('noContent');
+                    tabBody.appendChild(emptyNote);
+                } else {
+                    renderJsonOrPre(item.response, responseStr, tabBody);
+                }
+
+            } else {
+                // Raw JSON tab — full item object
+                tabBody.appendChild(buildJsonPreview(item, null));
             }
         }
         paintTab('request');
@@ -841,6 +1100,273 @@
                 paintTab(tb.dataset.tab);
             });
         });
+    }
+
+    // ── Full-screen JSON Viewer ────────────────────────────────────────────
+    function openJsonViewer(items) {
+        // Remove existing viewer if any
+        const existing = document.getElementById('jsonViewerOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'jsonViewerOverlay';
+        overlay.className = 'jv-overlay';
+
+        const modal = document.createElement('div');
+        modal.className = 'jv-modal';
+
+        // ── Header
+        const head = document.createElement('div');
+        head.className = 'jv-head';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'jv-title';
+        titleEl.innerHTML = `
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+          </svg>
+          <span>${escapeHtml(t('jsonViewerTitle', items.length))}</span>`;
+
+        const headRight = document.createElement('div');
+        headRight.className = 'jv-head-right';
+
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'json-tool-btn';
+        dlBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> ${escapeHtml(t('downloadBtn'))}`;
+        dlBtn.addEventListener('click', () => {
+            downloadJSON(items, 'har-json-view.json');
+        });
+
+        const headCopyBtn = document.createElement('button');
+        headCopyBtn.className = 'json-tool-btn jv-copy-btn';
+        headCopyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> ${escapeHtml(t('jsonCopy'))}`;
+        headCopyBtn.addEventListener('click', () => {
+            const text = JSON.stringify(items, null, 2);
+            const restore = () => {
+                headCopyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> ${escapeHtml(t('jsonCopy'))}`;
+                headCopyBtn.classList.remove('copied');
+            };
+            const markCopied = () => {
+                headCopyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> ${escapeHtml(t('jsonCopied'))}`;
+                headCopyBtn.classList.add('copied');
+                setTimeout(restore, 2000);
+            };
+            navigator.clipboard.writeText(text).then(markCopied).catch(() => {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                markCopied();
+            });
+        });
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'jv-close';
+        closeBtn.innerHTML = '&times;';
+        closeBtn.title = 'Close (Esc)';
+        closeBtn.addEventListener('click', () => overlay.remove());
+
+        headRight.append(dlBtn, headCopyBtn, closeBtn);
+        head.append(titleEl, headRight);
+
+        // ── Body: reuse buildJsonPreview — but we need it in scope
+        // We build a JSON preview directly here using the shared helper approach
+        const body = document.createElement('div');
+        body.className = 'jv-body';
+
+        // Build the preview for the whole array
+        const previewEl = _buildJsonPreviewGlobal(items);
+        body.appendChild(previewEl);
+
+        modal.append(head, body);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        // Animate in
+        requestAnimationFrame(() => overlay.classList.add('open'));
+
+        // Close on backdrop click
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        // Close on Escape
+        const onKey = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); } };
+        document.addEventListener('keydown', onKey);
+    }
+
+    // ── Shared JSON tree builder (standalone, for the global viewer) ────────
+    function _buildJsonPreviewGlobal(data) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'json-preview-wrap jv-preview';
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'json-toolbar';
+
+        const searchInput = document.createElement('input');
+        searchInput.className = 'json-search';
+        searchInput.placeholder = t('jsonSearchPh');
+        searchInput.dir = 'ltr';
+
+        const toolbarRight = document.createElement('div');
+        toolbarRight.className = 'json-toolbar-right';
+
+        const expandBtn   = document.createElement('button');
+        expandBtn.className = 'json-tool-btn';
+        expandBtn.textContent = t('jsonExpandAll');
+
+        const collapseBtn = document.createElement('button');
+        collapseBtn.className = 'json-tool-btn';
+        collapseBtn.textContent = t('jsonCollapseAll');
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'json-tool-btn json-copy-btn';
+        copyBtn.textContent = t('jsonCopy');
+
+        toolbarRight.append(expandBtn, collapseBtn, copyBtn);
+        toolbar.append(searchInput, toolbarRight);
+        wrapper.appendChild(toolbar);
+
+        const treeEl = document.createElement('div');
+        treeEl.className = 'json-tree jv-tree-full';
+        treeEl.dir = 'ltr';
+        wrapper.appendChild(treeEl);
+
+        function renderNode(val, key, depth, parentEl, isLast) {
+            const indent     = depth * 16;
+            const isObj      = val !== null && typeof val === 'object' && !Array.isArray(val);
+            const isArr      = Array.isArray(val);
+            const isComplex  = isObj || isArr;
+
+            const row = document.createElement('div');
+            row.className = 'jn-row';
+            row.style.paddingInlineStart = indent + 'px';
+
+            if (isComplex) {
+                const childCount = isArr ? val.length : Object.keys(val).length;
+                const openBrace  = isArr ? '[' : '{';
+                const closeBrace = isArr ? ']' : '}';
+
+                const toggle = document.createElement('span');
+                toggle.className = 'jn-toggle open';
+                toggle.textContent = '▾';
+
+                const keySpan = document.createElement('span');
+                if (key !== null) {
+                    keySpan.innerHTML = `<span class="jk">${escapeHtml(JSON.stringify(key))}</span><span class="jp">: </span>`;
+                }
+
+                const braceOpen = document.createElement('span');
+                braceOpen.className = 'jb';
+                braceOpen.textContent = openBrace;
+
+                const countBadge = document.createElement('span');
+                countBadge.className = 'jn-count';
+                countBadge.textContent = t('jsonItems', childCount);
+
+                const ellipsis = document.createElement('span');
+                ellipsis.className = 'jn-ellipsis';
+                ellipsis.textContent = '…';
+                ellipsis.style.display = 'none';
+
+                row.append(toggle, keySpan, braceOpen, countBadge, ellipsis);
+                parentEl.appendChild(row);
+
+                const childWrap = document.createElement('div');
+                childWrap.className = 'jn-children';
+
+                const entries = isArr ? val.map((v, i) => [i, v]) : Object.entries(val);
+                entries.forEach(([k, v], idx) => {
+                    renderNode(v, isArr ? null : k, depth + 1, childWrap, idx === entries.length - 1);
+                });
+                parentEl.appendChild(childWrap);
+
+                const closeRow = document.createElement('div');
+                closeRow.className = 'jn-row';
+                closeRow.style.paddingInlineStart = indent + 'px';
+                closeRow.innerHTML = `<span class="jb">${closeBrace}</span>${!isLast ? '<span class="jp">,</span>' : ''}`;
+                parentEl.appendChild(closeRow);
+
+                toggle.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const open = toggle.classList.contains('open');
+                    toggle.classList.toggle('open', !open);
+                    toggle.textContent = open ? '▸' : '▾';
+                    childWrap.style.display = open ? 'none' : '';
+                    closeRow.style.display  = open ? 'none' : '';
+                    countBadge.style.display = open ? '' : 'none';
+                    ellipsis.style.display   = open ? 'inline' : 'none';
+                });
+                row.style.cursor = 'pointer';
+                row.addEventListener('click', (e) => {
+                    if (e.target === row || e.target === braceOpen || e.target === keySpan) toggle.click();
+                });
+            } else {
+                let valClass = 'jv-other';
+                if (typeof val === 'string')  valClass = 'jv-str';
+                if (typeof val === 'number')  valClass = 'jv-num';
+                if (typeof val === 'boolean') valClass = 'jv-bool';
+                if (val === null)             valClass = 'jv-null';
+
+                const keyPart = key !== null ? `<span class="jk">${escapeHtml(JSON.stringify(key))}</span><span class="jp">: </span>` : '';
+                const valPart = `<span class="${valClass}">${escapeHtml(JSON.stringify(val))}</span>`;
+                const comma   = !isLast ? '<span class="jp">,</span>' : '';
+                row.innerHTML = `<span class="jn-leaf-pad"></span>${keyPart}${valPart}${comma}`;
+                row.className = 'jn-row jn-leaf';
+                parentEl.appendChild(row);
+            }
+        }
+
+        renderNode(data, null, 0, treeEl, true);
+
+        function setAllOpen(open) {
+            treeEl.querySelectorAll('.jn-toggle').forEach(tog => {
+                const isOpen = tog.classList.contains('open');
+                if (open !== isOpen) tog.click();
+            });
+        }
+        expandBtn.addEventListener('click', () => setAllOpen(true));
+        collapseBtn.addEventListener('click', () => setAllOpen(false));
+
+        copyBtn.addEventListener('click', () => {
+            const text = JSON.stringify(data, null, 2);
+            navigator.clipboard.writeText(text).then(() => {
+                copyBtn.textContent = t('jsonCopied');
+                setTimeout(() => { copyBtn.textContent = t('jsonCopy'); }, 1800);
+            }).catch(() => {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                copyBtn.textContent = t('jsonCopied');
+                setTimeout(() => { copyBtn.textContent = t('jsonCopy'); }, 1800);
+            });
+        });
+
+        searchInput.addEventListener('input', () => {
+            const term = searchInput.value.trim().toLowerCase();
+            treeEl.querySelectorAll('.jn-row').forEach(row => {
+                if (!term) {
+                    row.style.display = '';
+                    row.classList.remove('jn-match');
+                    return;
+                }
+                const match = row.textContent.toLowerCase().includes(term);
+                row.style.display = match ? '' : 'none';
+                row.classList.toggle('jn-match', match);
+                if (match) {
+                    let el = row.parentElement;
+                    while (el && el !== treeEl) {
+                        if (el.classList.contains('jn-children')) el.style.display = '';
+                        el = el.parentElement;
+                    }
+                }
+            });
+        });
+
+        return wrapper;
     }
 
     // ── Stats bar ──────────────────────────────────────────────────────────
