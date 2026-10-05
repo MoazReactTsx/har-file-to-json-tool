@@ -181,7 +181,11 @@
     langBtn.textContent = currentLang === 'en' ? 'عر' : 'EN';
     applyI18n();
 
-    langBtn.addEventListener('click', () => setLang(currentLang === 'ar' ? 'en' : 'ar'));
+    langBtn.addEventListener('click', () => {
+        setLang(currentLang === 'ar' ? 'en' : 'ar');
+        // Bug fix: rebuild the modal so its labels match the newly active language
+        shareModal = buildShareModal();
+    });
 
     // ── Share modal ────────────────────────────────────────────────────────
     function guessDeviceName() {

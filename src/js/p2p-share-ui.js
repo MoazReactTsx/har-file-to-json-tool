@@ -233,6 +233,8 @@
         }
 
         tabs.forEach(t => t.addEventListener('click', () => {
+            // Bug fix: don't allow tab switching while a connection is active
+            if (share) return;
             currentTab = t.dataset.tab;
             paintTabs();
             render();

@@ -269,6 +269,7 @@
             this._pendingPayload   = null;
             this._incomingChunks   = [];
             this._incomingExpected = 0;
+            this._receivedCount    = 0;  // Bug fix: dedicated counter for sparse-safe progress
             this._connectTimer     = null;
         }
 
@@ -313,11 +314,16 @@
                 const check = () => {
                     if (peer.iceGatheringState === 'complete') {
                         peer.removeEventListener('icegatheringstatechange', check);
+                        clearTimeout(timer);
                         resolve();
                     }
                 };
                 peer.addEventListener('icegatheringstatechange', check);
-                setTimeout(resolve, this.iceTimeoutMs);
+                // Bug fix: remove the listener when the timeout fires to avoid a stale listener
+                const timer = setTimeout(() => {
+                    peer.removeEventListener('icegatheringstatechange', check);
+                    resolve();
+                }, this.iceTimeoutMs);
             });
         }
 
@@ -411,6 +417,8 @@
                 this.onPeerDevice(desc.did || '', desc.dn || '');
             }
             await this.pc.setRemoteDescription({ type: desc.type, sdp: desc.sdp });
+            // Bug fix: restart the timer from now (answer accepted), not from offer creation
+            this._startConnectTimer();
             this.onStatus('connecting');
         }
 
@@ -490,11 +498,13 @@
             if (msg.t === 'start') {
                 this._incomingChunks   = new Array(msg.n);
                 this._incomingExpected = msg.n;
+                this._receivedCount    = 0;  // Bug fix: reset counter on new transfer
                 this.onProgress(0, msg.n);
             } else if (msg.t === 'chunk') {
                 this._incomingChunks[msg.i] = msg.d;
-                const received = this._incomingChunks.filter(c => c !== undefined).length;
-                this.onProgress(received, this._incomingExpected);
+                // Bug fix: use a dedicated counter instead of filtering a sparse array
+                this._receivedCount++;
+                this.onProgress(this._receivedCount, this._incomingExpected);
             } else if (msg.t === 'end') {
                 try {
                     const data = JSON.parse(this._incomingChunks.join(''));
