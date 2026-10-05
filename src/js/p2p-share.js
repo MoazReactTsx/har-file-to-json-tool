@@ -1,350 +1,123 @@
 /**
  * p2p-share.js
  * -----------------------------------------------------------------------
- * Reusable browser-to-browser data transport over WebRTC (manual/copy-paste
- * signaling — no signaling server needed). Works with ANY JSON-serializable
- * payload, in ANY project. Zero DOM dependency — pure transport logic.
+ * Browser-to-browser data transport using Trystero (serverless WebRTC
+ * signaling over public BitTorrent trackers) instead of manual SDP
+ * copy-paste. No signaling server of our own, no backend — but also no
+ * "send me a huge code, now send me a huge code back" dance. Both sides
+ * just need the same short room code.
+ *
+ * Loaded as a plain <script> tag (NOT type="module") — Trystero itself is
+ * ESM-only, so it's pulled in lazily via a dynamic import() from a CDN the
+ * first time it's actually needed. That keeps this file loadable the same
+ * way as every other script in the project (no build step, no bundler).
  *
  * Usage (host / sender side):
  *   const share = new P2PShare({ onStatus, onData, onError });
- *   const offerCode = await share.createOffer(myPayload); // send this to the peer
- *   // ...peer sends back an answer code...
- *   await share.acceptAnswer(answerCode);
+ *   const roomCode = await share.hostRoom(myPayload); // give this code to the peer
+ *   // ...once they join, `myPayload` is sent automatically...
  *
  * Usage (join / receiver side):
  *   const share = new P2PShare({ onData: (data) => console.log(data) });
- *   const answerCode = await share.createAnswer(offerCode); // send this back
+ *   await share.joinRoom(roomCode);
  *   // share.onData fires automatically once the transfer completes
- *
- * Both sides can also send after connecting via share.send(payload).
  * -----------------------------------------------------------------------
- * Includes P2PDeviceStore — AES-GCM encrypted localStorage device registry
- * with automatic in-memory fallback and integrity validation.
- * -----------------------------------------------------------------------
- * Plain vanilla JS — no bundler, no <script type="module">, no build step.
- * Just include it with a normal <script src="p2p-share.js"></script> tag
- * (before p2p-share-ui.js, if you use that too) and use `P2PShare` and
- * `P2PDeviceStore` globally.
+ * Plain vanilla JS — no bundler, no <script type="module"> needed on this
+ * file itself. Just include it with a normal
+ * <script src="p2p-share.js"></script> tag (before p2p-share-ui.js, if you
+ * use that too) and use `P2PShare` globally.
  * -----------------------------------------------------------------------
  */
 
 (function(global) {
     'use strict';
 
-    // ═══════════════════════════════════════════════════════════════════
-    // P2PDeviceStore — safe encrypted device registry
-    // ═══════════════════════════════════════════════════════════════════
-    /**
-     * Encrypted, persistent device registry backed by localStorage.
-     * Falls back silently to an in-memory store if localStorage is
-     * unavailable (private mode, quota exceeded, SecurityError).
-     *
-     * A single AES-GCM 256-bit key is auto-generated on first use and
-     * stored in localStorage as a raw Base64 export. If the key is ever
-     * lost (storage cleared), existing records simply cannot be decrypted
-     * and are discarded — no crash.
-     *
-     * Device record shape:
-     * {
-     *   id:          string   — random 8-hex ID assigned when first saved
-     *   name:        string   — human-friendly label (editable)
-     *   lastSeen:    number   — Date.now() of last successful connection
-     *   savedAt:     number   — Date.now() when first saved
-     * }
-     */
-    class P2PDeviceStore {
-        static STORAGE_KEY      = 'p2pds_v1';
-        static CRYPTO_KEY_NAME  = 'p2pds_ck_v1';
+    // Trystero is ESM-only, so it's fetched from a CDN with a dynamic
+    // import() the first time it's needed, then cached. The 'torrent'
+    // build uses public BitTorrent trackers for the initial handshake
+    // (who's in this room) — no server of ours, no account, no API key.
+    const TRYSTERO_CDN = 'https://esm.run/trystero/torrent';
+    let trysteroModulePromise = null;
 
-        constructor() {
-            this._memStore = [];         // in-memory fallback
-            this._useMemory = false;
-            this._cryptoKey = null;      // CryptoKey, loaded lazily
-            this._ready = this._init();  // Promise<void>
+    function loadTrystero() {
+        if (!trysteroModulePromise) {
+            trysteroModulePromise = import(TRYSTERO_CDN);
         }
-
-        /** Resolves when the store is initialised (key loaded/created). */
-        get ready() { return this._ready; }
-
-        // ── Lifecycle ──────────────────────────────────────────────────
-        async _init() {
-            this._cryptoKey = await this._loadOrCreateKey();
-        }
-
-        async _loadOrCreateKey() {
-            if (!global.crypto || !global.crypto.subtle) {
-                // SubtleCrypto not available — use memory store only
-                this._useMemory = true;
-                return null;
-            }
-            try {
-                const raw64 = this._lsGet(P2PDeviceStore.CRYPTO_KEY_NAME);
-                if (raw64) {
-                    const raw = Uint8Array.from(atob(raw64), c => c.charCodeAt(0));
-                    return await crypto.subtle.importKey(
-                        'raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
-                    );
-                }
-                const key = await crypto.subtle.generateKey(
-                    { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
-                );
-                const exported = await crypto.subtle.exportKey('raw', key);
-                const raw64out = btoa(String.fromCharCode(...new Uint8Array(exported)));
-                this._lsSet(P2PDeviceStore.CRYPTO_KEY_NAME, raw64out);
-                return key;
-            } catch (e) {
-                this._useMemory = true;
-                return null;
-            }
-        }
-
-        // ── Storage helpers ────────────────────────────────────────────
-        _lsGet(k) {
-            try { return localStorage.getItem(k); } catch (e) { return null; }
-        }
-        _lsSet(k, v) {
-            try { localStorage.setItem(k, v); return true; } catch (e) { return false; }
-        }
-        _lsDel(k) {
-            try { localStorage.removeItem(k); } catch (e) { /* noop */ }
-        }
-
-        // ── Crypto helpers ─────────────────────────────────────────────
-        async _encrypt(obj) {
-            if (!this._cryptoKey) return null;
-            const json = JSON.stringify(obj);
-            const enc  = new TextEncoder().encode(json);
-            const iv   = crypto.getRandomValues(new Uint8Array(12));
-            const cipher = await crypto.subtle.encrypt(
-                { name: 'AES-GCM', iv }, this._cryptoKey, enc
-            );
-            // pack: iv(12) | ciphertext
-            const buf = new Uint8Array(12 + cipher.byteLength);
-            buf.set(iv, 0);
-            buf.set(new Uint8Array(cipher), 12);
-            return btoa(String.fromCharCode(...buf));
-        }
-
-        async _decrypt(b64) {
-            if (!this._cryptoKey || !b64) return null;
-            try {
-                const buf  = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-                const iv   = buf.slice(0, 12);
-                const data = buf.slice(12);
-                const plain = await crypto.subtle.decrypt(
-                    { name: 'AES-GCM', iv }, this._cryptoKey, data
-                );
-                return JSON.parse(new TextDecoder().decode(plain));
-            } catch (e) {
-                return null;
-            }
-        }
-
-        // ── Public API ─────────────────────────────────────────────────
-
-        /** @returns {Promise<Array>} list of all saved device records */
-        async getAll() {
-            await this._ready;
-            if (this._useMemory) return [...this._memStore];
-            const b64 = this._lsGet(P2PDeviceStore.STORAGE_KEY);
-            if (!b64) return [];
-            const arr = await this._decrypt(b64);
-            if (!Array.isArray(arr)) return [];
-            return arr.filter(d => d && d.id && d.name); // schema check
-        }
-
-        /** @returns {Promise<string>} the new device's ID */
-        async saveDevice(name) {
-            await this._ready;
-            const devices = await this.getAll();
-            const id = Math.random().toString(16).slice(2, 10).toUpperCase();
-            const record = { id, name: String(name).trim() || 'جهاز جديد', lastSeen: Date.now(), savedAt: Date.now() };
-            devices.push(record);
-            await this._persist(devices);
-            return id;
-        }
-
-        /** Update lastSeen timestamp for an existing device by ID. */
-        async touchDevice(id) {
-            await this._ready;
-            const devices = await this.getAll();
-            const dev = devices.find(d => d.id === id);
-            if (dev) {
-                dev.lastSeen = Date.now();
-                await this._persist(devices);
-            }
-        }
-
-        /** Rename a device. */
-        async renameDevice(id, newName) {
-            await this._ready;
-            const devices = await this.getAll();
-            const dev = devices.find(d => d.id === id);
-            if (dev) {
-                dev.name = String(newName).trim() || dev.name;
-                await this._persist(devices);
-                return true;
-            }
-            return false;
-        }
-
-        /** Remove a device by ID. */
-        async removeDevice(id) {
-            await this._ready;
-            const devices = (await this.getAll()).filter(d => d.id !== id);
-            await this._persist(devices);
-        }
-
-        /** Remove all saved devices. */
-        async clear() {
-            await this._ready;
-            if (this._useMemory) { this._memStore = []; return; }
-            this._lsDel(P2PDeviceStore.STORAGE_KEY);
-        }
-
-        /** @returns {boolean} whether storage is encrypted (false = memory-only fallback) */
-        get isEncrypted() { return !this._useMemory && !!this._cryptoKey; }
-
-        async _persist(devices) {
-            if (this._useMemory) { this._memStore = devices; return; }
-            const b64 = await this._encrypt(devices);
-            if (b64 === null || !this._lsSet(P2PDeviceStore.STORAGE_KEY, b64)) {
-                // Fallback: quota or permission error
-                this._useMemory = true;
-                this._memStore = devices;
-            }
-        }
+        return trysteroModulePromise;
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // P2PShare — WebRTC data transport
-    // ═══════════════════════════════════════════════════════════════════
+    // Room codes avoid visually-ambiguous characters (0/O, 1/l/I) since
+    // they're meant to be read aloud or typed by hand.
+    const ROOM_CODE_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+    function randomRoomCode(len = 6) {
+        let out = '';
+        for (let i = 0; i < len; i++) {
+            out += ROOM_CODE_ALPHABET[Math.floor(Math.random() * ROOM_CODE_ALPHABET.length)];
+        }
+        return out;
+    }
+
     class P2PShare {
         /**
          * @param {Object} opts
-         * @param {Array}  [opts.iceServers]        - custom ICE servers (defaults to public STUN)
-         * @param {number} [opts.chunkSize]         - bytes per data-channel message (default 15000)
-         * @param {number} [opts.iceTimeoutMs]      - max wait for ICE gathering (default 4000)
-         * @param {number} [opts.connectTimeoutMs]  - max wait for the data-channel to actually open,
-         *        counted from the moment a description is APPLIED (acceptAnswer / createAnswer),
-         *        not from when a code is generated — manual copy/paste between two people can
-         *        easily take longer than a few seconds. Default 120000 (2 minutes).
-         * @param {string} [opts.deviceId]          - local device ID to embed in handshake codes
-         * @param {string} [opts.deviceName]        - local device name to embed in handshake codes
-         * @param {(status: string) => void}         [opts.onStatus]   - status events
+         * @param {string} [opts.appId]             - namespaces rooms so this app's room
+         *        codes don't collide with other sites also using Trystero. Keep this
+         *        constant across your whole app; change it only if you want old/new
+         *        versions to never share a room by accident.
+         * @param {number} [opts.chunkSize]         - characters per message (default 15000)
+         * @param {number} [opts.connectTimeoutMs]  - max wait for a peer to join the room
+         *        before giving up (default 120000 / 2 minutes). Counted from when the
+         *        room is actually created/joined, not from any earlier step.
+         * @param {string} [opts.deviceName]        - local device name, informational only
+         * @param {(status: string) => void}         [opts.onStatus]   - status events:
+         *        'connected-sent' | 'connected-waiting' | 'received' | 'disconnected' |
+         *        'timeout' | 'error'
          * @param {(received: number, total: number) => void} [opts.onProgress]
          * @param {(data: any) => void}              [opts.onData]     - fired when transfer completes
-         * @param {(err: Error, code?: string) => void} [opts.onError] - error with optional code
-         * @param {(peerDeviceId: string, peerDeviceName: string) => void} [opts.onPeerDevice]
-         *        - fired with the remote device's id & name after handshake decode
+         * @param {(err: Error, code?: string) => void} [opts.onError] - error with optional code:
+         *        'load-error' | 'send-error' | 'reassemble-error' | 'timeout'
          */
         constructor({
-            iceServers,
+            appId            = 'har-inspector-v1',
             chunkSize        = 15000,
-            iceTimeoutMs     = 4000,
             connectTimeoutMs = 120000,
-            deviceId,
             deviceName,
             onStatus,
             onProgress,
             onData,
             onError,
-            onPeerDevice,
         } = {}) {
-            this.rtcConfig = {
-                iceServers: iceServers || [{
-                    urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']
-                }],
-            };
+            this.appId            = appId;
             this.chunkSize        = chunkSize;
-            this.iceTimeoutMs     = iceTimeoutMs;
             this.connectTimeoutMs = connectTimeoutMs;
-            this.deviceId         = deviceId   || null;
             this.deviceName       = deviceName || null;
-            this.onStatus      = onStatus      || (() => {});
-            this.onProgress    = onProgress    || (() => {});
-            this.onData        = onData        || (() => {});
-            this.onError       = onError       || (() => {});
-            this.onPeerDevice  = onPeerDevice  || (() => {});
+            this.onStatus   = onStatus   || (() => {});
+            this.onProgress = onProgress || (() => {});
+            this.onData     = onData     || (() => {});
+            this.onError    = onError    || (() => {});
 
-            this.pc = null;
-            this.dc = null;
+            this.room          = null;
+            this._sendData      = null;
             this._pendingPayload   = null;
             this._incomingChunks   = [];
             this._incomingExpected = 0;
-            this._receivedCount    = 0;  // dedicated counter for sparse-safe progress
+            this._receivedCount    = 0;
             this._connectTimer     = null;
+            this.roomCode       = null;
         }
 
-        /** Close any active connection and reset state. Safe to call anytime. */
+        /** Leave the room (if any) and reset all state. Safe to call anytime. */
         teardown() {
             this._clearConnectTimer();
-            if (this.dc) {
-                try { this.dc.close(); } catch (e) { /* noop */ }
-                this.dc = null;
+            if (this.room) {
+                try { this.room.leave(); } catch (e) { /* noop */ }
+                this.room = null;
             }
-            if (this.pc) {
-                try { this.pc.close(); } catch (e) { /* noop */ }
-                this.pc = null;
-            }
-            this._incomingChunks   = [];
-            this._incomingExpected = 0;
-        }
-
-        // ── Encoding / Decoding ────────────────────────────────────────
-        /**
-         * Encode an SDP descriptor + optional device metadata into a
-         * compact Base64 code suitable for copy-paste.
-         */
-        static encode(desc, deviceId, deviceName) {
-            return btoa(unescape(encodeURIComponent(JSON.stringify({
-                type: desc.type,
-                sdp:  desc.sdp,
-                ...(deviceId   ? { did: deviceId }   : {}),
-                ...(deviceName ? { dn:  deviceName  } : {}),
-            }))));
-        }
-
-        /** Decode a Base64 code back into { type, sdp, did?, dn? }. */
-        static decode(code) {
-            return JSON.parse(decodeURIComponent(escape(atob(code.trim()))));
-        }
-
-        // ── ICE gathering ──────────────────────────────────────────────
-        _waitIceGatheringComplete(peer) {
-            return new Promise((resolve) => {
-                if (peer.iceGatheringState === 'complete') { resolve(); return; }
-                const check = () => {
-                    if (peer.iceGatheringState === 'complete') {
-                        peer.removeEventListener('icegatheringstatechange', check);
-                        clearTimeout(timer);
-                        resolve();
-                    }
-                };
-                peer.addEventListener('icegatheringstatechange', check);
-                // remove the listener when the timeout fires to avoid a stale listener
-                const timer = setTimeout(() => {
-                    peer.removeEventListener('icegatheringstatechange', check);
-                    resolve();
-                }, this.iceTimeoutMs);
-            });
-        }
-
-        // ── Connection timer ───────────────────────────────────────────
-        // IMPORTANT: this must only be started once a remote description has
-        // actually been applied (i.e. right before the browser can realistically
-        // open the DataChannel) — never while we're still waiting on a human to
-        // copy/paste a code between two chat apps. Starting it too early is what
-        // caused connections to "time out" before the other side even replied.
-        _startConnectTimer() {
-            this._clearConnectTimer();
-            this._connectTimer = setTimeout(() => {
-                if (this.dc && this.dc.readyState !== 'open') {
-                    this._emitError(new Error('انتهت مهلة الاتصال — لم يفتح DataChannel في الوقت المحدد'), 'timeout');
-                    this.teardown();
-                    this.onStatus('timeout');
-                }
-            }, this.connectTimeoutMs);
+            this._sendData          = null;
+            this._pendingPayload    = null;
+            this._incomingChunks    = [];
+            this._incomingExpected  = 0;
+            this.roomCode           = null;
         }
 
         _clearConnectTimer() {
@@ -354,25 +127,13 @@
             }
         }
 
-        // ── ICE / connection state monitoring ──────────────────────────
-        _attachConnectionMonitor(peer) {
-            peer.addEventListener('iceconnectionstatechange', () => {
-                const s = peer.iceConnectionState;
-                if (s === 'failed') {
-                    this._emitError(new Error('فشل الاتصال — ICE failed'), 'ice-failed');
-                    this.onStatus('error');
-                    this.teardown();
-                } else if (s === 'disconnected') {
-                    this.onStatus('disconnected');
-                }
-            });
-            peer.addEventListener('connectionstatechange', () => {
-                if (peer.connectionState === 'failed') {
-                    this._emitError(new Error('فشل الاتصال — connection failed'), 'connection-failed');
-                    this.onStatus('error');
-                    this.teardown();
-                }
-            });
+        _startConnectTimer(onTimeoutMessage) {
+            this._clearConnectTimer();
+            this._connectTimer = setTimeout(() => {
+                this._emitError(new Error(onTimeoutMessage), 'timeout');
+                this.onStatus('timeout');
+                this.teardown();
+            }, this.connectTimeoutMs);
         }
 
         _emitError(err, code) {
@@ -381,160 +142,102 @@
 
         // ── HOST ───────────────────────────────────────────────────────
         /**
-         * Start hosting: creates an offer and (once the channel opens) sends `payload`.
-         * Does NOT start the connect timer — that only begins once the other side's
-         * answer has actually been applied in acceptAnswer(), since generating and
-         * sending the offer code is a manual, human-paced step with no fixed deadline.
+         * Create a room and wait for a peer to join. `payload` is sent
+         * automatically the moment someone joins.
          * @param {any} payload - anything JSON-serializable
-         * @returns {Promise<string>} offer code to send to the other peer
+         * @returns {Promise<string>} the room code to share with the other person
          */
-        async createOffer(payload) {
+        async hostRoom(payload) {
             this.teardown();
             this._pendingPayload = payload;
-            this.pc = new RTCPeerConnection(this.rtcConfig);
-            this._attachConnectionMonitor(this.pc);
-            this.dc = this.pc.createDataChannel('data');
 
-            this.dc.onopen = () => {
-                this._clearConnectTimer();
-                if (this._pendingPayload !== null) this._send(this._pendingPayload);
-                this.onStatus('connected-sent');
-            };
-            this.dc.onclose = () => this.onStatus('closed');
-            this.dc.onerror = (e) => {
-                this._emitError(new Error('خطأ في قناة البيانات'), 'channel-error');
-            };
-
-            const offer = await this.pc.createOffer();
-            await this.pc.setLocalDescription(offer);
-            await this._waitIceGatheringComplete(this.pc);
-            // No timer here on purpose — we're about to hand the code to a human.
-            return P2PShare.encode(this.pc.localDescription, this.deviceId, this.deviceName);
-        }
-
-        /**
-         * Complete the handshake with the answer code the other peer sent back.
-         * This is where the connect timer actually starts, since this is the
-         * point at which the browser can realistically establish the connection.
-         * @param {string} answerCode
-         */
-        async acceptAnswer(answerCode) {
-            if (!this.pc) throw new Error('لا يوجد offer نشط — ابدأ المشاركة الأول.');
-            // Guard: setRemoteDescription(answer) is only valid while the
-            // connection is waiting on an answer (signalingState
-            // 'have-local-offer'). Calling it again afterwards — e.g. the
-            // user double-clicks "Connect", or re-pastes the same code once
-            // already connected — throws "Called in wrong state: stable"
-            // from the browser. Treat that as a no-op / clear message
-            // instead of letting the raw DOMException surface.
-            if (this.pc.signalingState === 'stable') {
-                this.onStatus('connected-sent');
-                return;
-            }
-            if (this.pc.signalingState !== 'have-local-offer') {
-                throw new Error('الاتصال في حالة غير متوقعة — ابدأ المشاركة من جديد.');
-            }
-            let desc;
+            let trystero;
             try {
-                desc = P2PShare.decode(answerCode);
+                trystero = await loadTrystero();
             } catch (e) {
-                throw new Error('كود الرد غير صالح — تأكد من نسخه كاملًا');
+                this._emitError(new Error('تعذر تحميل مكتبة الاتصال — تحقق من الإنترنت وحاول تاني'), 'load-error');
+                throw e;
             }
-            if (desc.did || desc.dn) {
-                this.onPeerDevice(desc.did || '', desc.dn || '');
-            }
-            await this.pc.setRemoteDescription({ type: desc.type, sdp: desc.sdp });
-            this._startConnectTimer();
-            this.onStatus('connecting');
+
+            this.roomCode = randomRoomCode();
+            this.room = trystero.joinRoom({ appId: this.appId }, this.roomCode);
+            const [sendData, getData] = this.room.makeAction('har-data');
+            this._sendData = sendData;
+            void getData; // host doesn't expect incoming data in this simple protocol
+
+            this.room.onPeerJoin(() => {
+                this._clearConnectTimer();
+                this._send(this._pendingPayload);
+                this.onStatus('connected-sent');
+            });
+            this.room.onPeerLeave(() => this.onStatus('disconnected'));
+
+            this._startConnectTimer('محدش دخل الأوضة خلال الوقت المحدد — جرّب كود جديد.');
+            return this.roomCode;
         }
 
         // ── JOIN ───────────────────────────────────────────────────────
         /**
-         * Join a host using the offer code they sent you.
-         * Starts the connect timer right after the offer is applied, since from
-         * this point on the only remaining steps are automatic ICE negotiation —
-         * sending the resulting answer code back to the host is on their end.
-         * @param {string} offerCode
-         * @returns {Promise<string>} answer code to send back to the host
+         * Join a room by its code and wait for the host's data to arrive.
+         * @param {string} code
          */
-        async createAnswer(offerCode) {
+        async joinRoom(code) {
             this.teardown();
-            let desc;
+            const trimmed = String(code || '').trim().toLowerCase();
+            if (!trimmed) throw new Error('كود الأوضة فاضي.');
+
+            let trystero;
             try {
-                desc = P2PShare.decode(offerCode);
+                trystero = await loadTrystero();
             } catch (e) {
-                throw new Error('كود المضيف غير صالح — تأكد من نسخه كاملًا');
-            }
-            if (desc.did || desc.dn) {
-                this.onPeerDevice(desc.did || '', desc.dn || '');
+                this._emitError(new Error('تعذر تحميل مكتبة الاتصال — تحقق من الإنترنت وحاول تاني'), 'load-error');
+                throw e;
             }
 
-            this.pc = new RTCPeerConnection(this.rtcConfig);
-            this._attachConnectionMonitor(this.pc);
-            this.pc.ondatachannel = (e) => {
-                this.dc = e.channel;
-                this.dc.onmessage = (ev) => this._handleIncoming(ev.data);
-                this.dc.onopen    = () => {
-                    this._clearConnectTimer();
-                    this.onStatus('connected-waiting');
-                };
-                this.dc.onclose = () => this.onStatus('closed');
-                this.dc.onerror = () => {
-                    this._emitError(new Error('خطأ في قناة البيانات'), 'channel-error');
-                };
-            };
+            this.roomCode = trimmed;
+            this.room = trystero.joinRoom({ appId: this.appId }, this.roomCode);
+            const [sendData, getData] = this.room.makeAction('har-data');
+            this._sendData = sendData;
+            void sendData; // joiner doesn't send anything in this simple protocol
 
-            await this.pc.setRemoteDescription({ type: desc.type, sdp: desc.sdp });
-            const answer = await this.pc.createAnswer();
-            await this.pc.setLocalDescription(answer);
-            await this._waitIceGatheringComplete(this.pc);
-            // Timer starts here: the offer has been applied, so from this point
-            // the only thing left is ICE/DTLS negotiation once the host pastes
-            // our answer back in — that part has a realistic fixed deadline.
-            this._startConnectTimer();
-            return P2PShare.encode(this.pc.localDescription, this.deviceId, this.deviceName);
+            getData((msg) => this._handleIncoming(msg));
+
+            this.room.onPeerJoin(() => {
+                this._clearConnectTimer();
+                this.onStatus('connected-waiting');
+            });
+            this.room.onPeerLeave(() => this.onStatus('disconnected'));
+
+            this._startConnectTimer('محدش لقى الأوضة دي — تأكد من الكود وإن المضيف لسه فاتح الصفحة.');
         }
 
         // ── TRANSFER ───────────────────────────────────────────────────
-        /** Send (or queue) a payload over an already-open channel. */
-        send(payload) {
-            if (!this.dc || this.dc.readyState !== 'open') {
-                this._pendingPayload = payload;
-                return;
-            }
-            this._send(payload);
-        }
-
         _send(payload) {
             const json  = JSON.stringify(payload);
             const total = Math.max(1, Math.ceil(json.length / this.chunkSize));
             try {
-                this.dc.send(JSON.stringify({ t: 'start', n: total }));
+                this._sendData({ t: 'start', n: total });
                 for (let i = 0; i < total; i++) {
-                    this.dc.send(JSON.stringify({
+                    this._sendData({
                         t: 'chunk', i,
-                        d: json.slice(i * this.chunkSize, (i + 1) * this.chunkSize)
-                    }));
+                        d: json.slice(i * this.chunkSize, (i + 1) * this.chunkSize),
+                    });
                 }
-                this.dc.send(JSON.stringify({ t: 'end' }));
+                this._sendData({ t: 'end' });
             } catch (e) {
                 this._emitError(e, 'send-error');
             }
         }
 
-        _handleIncoming(raw) {
-            let msg;
-            try { msg = JSON.parse(raw); }
-            catch (e) { this._emitError(e, 'parse-error'); return; }
-
+        _handleIncoming(msg) {
+            if (!msg || typeof msg !== 'object') return;
             if (msg.t === 'start') {
                 this._incomingChunks   = new Array(msg.n);
                 this._incomingExpected = msg.n;
-                this._receivedCount    = 0;  // reset counter on new transfer
+                this._receivedCount    = 0;
                 this.onProgress(0, msg.n);
             } else if (msg.t === 'chunk') {
                 this._incomingChunks[msg.i] = msg.d;
-                // use a dedicated counter instead of filtering a sparse array
                 this._receivedCount++;
                 this.onProgress(this._receivedCount, this._incomingExpected);
             } else if (msg.t === 'end') {
@@ -549,7 +252,6 @@
         }
     }
 
-    global.P2PShare       = P2PShare;
-    global.P2PDeviceStore = P2PDeviceStore;
+    global.P2PShare = P2PShare;
 
 })(typeof window !== 'undefined' ? window : this);
