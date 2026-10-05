@@ -48,14 +48,14 @@
         copy:             'نسخ الكود',
         connect:          'اتصال',
         answerPlaceholder:'الصق كود الرد هنا...',
-        waitingAnswer:    'في انتظار كود الرد...',
+        waitingAnswer:    'في انتظار كود الرد... (مفيش وقت محدد، خد وقتك)',
         connecting:       'بيتصل...',
         connectedSent:    (n) => `متصل — تم إرسال ${n} عنصر ✅`,
         closed:           'الاتصال اتقفل',
         disconnected:     'انقطع الاتصال',
         badAnswer:        'كود الرد غير صالح — تأكد من نسخه كاملًا.',
         iceFailed:        'فشل الاتصال — تعذّر الوصول بين الجهازين. تحقق من الشبكة.',
-        timeout:          'انتهت مهلة الاتصال — لم يفتح DataChannel خلال 20 ثانية.',
+        timeout:          'انتهت مهلة الاتصال — لم يكتمل الاتصال بعد لصق الكود في الوقت المحدد. جرّب تاني وتأكد إنك لصقت الكود كامل بسرعة بعد ما توصلك.',
         channelError:     'خطأ في قناة البيانات.',
         sendError:        'خطأ أثناء إرسال البيانات.',
         joinIntro:        'الصق الكود اللي بعتهولك المضيف، وهيتولّد كود رد — ابعته له. البيانات هتظهر أول ما يوصل الاتصال.',
@@ -233,7 +233,7 @@
         }
 
         tabs.forEach(t => t.addEventListener('click', () => {
-            // Bug fix: don't allow tab switching while a connection is active
+            // don't allow tab switching while a connection is active
             if (share) return;
             currentTab = t.dataset.tab;
             paintTabs();
@@ -320,6 +320,9 @@
                 body.querySelector('[data-step="offer"]').style.display  = 'flex';
                 body.querySelector('[data-step="answer"]').style.display = 'flex';
                 body.querySelector('[data-el="offerCode"]').value        = offerCode;
+                // Note: no timer is running yet at this point — it's safe to take
+                // as long as needed to copy/send this code. The timer only starts
+                // once you paste the answer code back in and press "connect".
                 setStatus(L.waitingAnswer, 'pending');
 
                 body.querySelector('[data-act="copyOffer"]').addEventListener('click', () => copyText(offerCode));
@@ -385,6 +388,9 @@
                     const answerCode = await share.createAnswer(code);
                     body.querySelector('[data-step="answer"]').style.display = 'flex';
                     body.querySelector('[data-el="answerCode"]').value       = answerCode;
+                    // The timer IS running from here (createAnswer already started it),
+                    // since all that's left is ICE/DTLS negotiation once the host
+                    // pastes this code in — that part has a realistic fixed deadline.
                     setStatus(L.waitingAnswer, 'pending');
                     body.querySelector('[data-act="copyAnswer"]').addEventListener('click', () => copyText(answerCode));
                 } catch (e) {

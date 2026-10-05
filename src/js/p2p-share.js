@@ -225,7 +225,10 @@
          * @param {Array}  [opts.iceServers]        - custom ICE servers (defaults to public STUN)
          * @param {number} [opts.chunkSize]         - bytes per data-channel message (default 15000)
          * @param {number} [opts.iceTimeoutMs]      - max wait for ICE gathering (default 4000)
-         * @param {number} [opts.connectTimeoutMs]  - max wait for data-channel open (default 20000)
+         * @param {number} [opts.connectTimeoutMs]  - max wait for the data-channel to actually open,
+         *        counted from the moment a description is APPLIED (acceptAnswer / createAnswer),
+         *        not from when a code is generated — manual copy/paste between two people can
+         *        easily take longer than a few seconds. Default 120000 (2 minutes).
          * @param {string} [opts.deviceId]          - local device ID to embed in handshake codes
          * @param {string} [opts.deviceName]        - local device name to embed in handshake codes
          * @param {(status: string) => void}         [opts.onStatus]   - status events
@@ -239,7 +242,7 @@
             iceServers,
             chunkSize        = 15000,
             iceTimeoutMs     = 4000,
-            connectTimeoutMs = 20000,
+            connectTimeoutMs = 120000,
             deviceId,
             deviceName,
             onStatus,
@@ -269,7 +272,7 @@
             this._pendingPayload   = null;
             this._incomingChunks   = [];
             this._incomingExpected = 0;
-            this._receivedCount    = 0;  // Bug fix: dedicated counter for sparse-safe progress
+            this._receivedCount    = 0;  // dedicated counter for sparse-safe progress
             this._connectTimer     = null;
         }
 
@@ -319,7 +322,7 @@
                     }
                 };
                 peer.addEventListener('icegatheringstatechange', check);
-                // Bug fix: remove the listener when the timeout fires to avoid a stale listener
+                // remove the listener when the timeout fires to avoid a stale listener
                 const timer = setTimeout(() => {
                     peer.removeEventListener('icegatheringstatechange', check);
                     resolve();
@@ -328,11 +331,16 @@
         }
 
         // ── Connection timer ───────────────────────────────────────────
+        // IMPORTANT: this must only be started once a remote description has
+        // actually been applied (i.e. right before the browser can realistically
+        // open the DataChannel) — never while we're still waiting on a human to
+        // copy/paste a code between two chat apps. Starting it too early is what
+        // caused connections to "time out" before the other side even replied.
         _startConnectTimer() {
             this._clearConnectTimer();
             this._connectTimer = setTimeout(() => {
                 if (this.dc && this.dc.readyState !== 'open') {
-                    this._emitError(new Error('انتهت مهلة الاتصال'), 'timeout');
+                    this._emitError(new Error('انتهت مهلة الاتصال — لم يفتح DataChannel في الوقت المحدد'), 'timeout');
                     this.teardown();
                     this.onStatus('timeout');
                 }
@@ -374,6 +382,9 @@
         // ── HOST ───────────────────────────────────────────────────────
         /**
          * Start hosting: creates an offer and (once the channel opens) sends `payload`.
+         * Does NOT start the connect timer — that only begins once the other side's
+         * answer has actually been applied in acceptAnswer(), since generating and
+         * sending the offer code is a manual, human-paced step with no fixed deadline.
          * @param {any} payload - anything JSON-serializable
          * @returns {Promise<string>} offer code to send to the other peer
          */
@@ -397,16 +408,18 @@
             const offer = await this.pc.createOffer();
             await this.pc.setLocalDescription(offer);
             await this._waitIceGatheringComplete(this.pc);
-            this._startConnectTimer();
+            // No timer here on purpose — we're about to hand the code to a human.
             return P2PShare.encode(this.pc.localDescription, this.deviceId, this.deviceName);
         }
 
         /**
          * Complete the handshake with the answer code the other peer sent back.
+         * This is where the connect timer actually starts, since this is the
+         * point at which the browser can realistically establish the connection.
          * @param {string} answerCode
          */
         async acceptAnswer(answerCode) {
-            if (!this.pc) throw new Error('No active offer — call createOffer() first.');
+            if (!this.pc) throw new Error('لا يوجد offer نشط — ابدأ المشاركة الأول.');
             let desc;
             try {
                 desc = P2PShare.decode(answerCode);
@@ -417,7 +430,6 @@
                 this.onPeerDevice(desc.did || '', desc.dn || '');
             }
             await this.pc.setRemoteDescription({ type: desc.type, sdp: desc.sdp });
-            // Bug fix: restart the timer from now (answer accepted), not from offer creation
             this._startConnectTimer();
             this.onStatus('connecting');
         }
@@ -425,6 +437,9 @@
         // ── JOIN ───────────────────────────────────────────────────────
         /**
          * Join a host using the offer code they sent you.
+         * Starts the connect timer right after the offer is applied, since from
+         * this point on the only remaining steps are automatic ICE negotiation —
+         * sending the resulting answer code back to the host is on their end.
          * @param {string} offerCode
          * @returns {Promise<string>} answer code to send back to the host
          */
@@ -459,6 +474,9 @@
             const answer = await this.pc.createAnswer();
             await this.pc.setLocalDescription(answer);
             await this._waitIceGatheringComplete(this.pc);
+            // Timer starts here: the offer has been applied, so from this point
+            // the only thing left is ICE/DTLS negotiation once the host pastes
+            // our answer back in — that part has a realistic fixed deadline.
             this._startConnectTimer();
             return P2PShare.encode(this.pc.localDescription, this.deviceId, this.deviceName);
         }
@@ -498,11 +516,11 @@
             if (msg.t === 'start') {
                 this._incomingChunks   = new Array(msg.n);
                 this._incomingExpected = msg.n;
-                this._receivedCount    = 0;  // Bug fix: reset counter on new transfer
+                this._receivedCount    = 0;  // reset counter on new transfer
                 this.onProgress(0, msg.n);
             } else if (msg.t === 'chunk') {
                 this._incomingChunks[msg.i] = msg.d;
-                // Bug fix: use a dedicated counter instead of filtering a sparse array
+                // use a dedicated counter instead of filtering a sparse array
                 this._receivedCount++;
                 this.onProgress(this._receivedCount, this._incomingExpected);
             } else if (msg.t === 'end') {
